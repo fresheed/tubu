@@ -176,6 +176,34 @@ impl From<RawTimelineEntry> for TimelineEntry {
     }
 }
 
+// Incomplete stub.
+// Only used for a dummy iterator over timeline entries
+pub struct Segment {
+    // name: String,
+}
+
+struct TEIterator<'a> {
+    te: &'a TimelineEntry,
+    cur_index: usize,
+}
+
+impl<'a> Iterator for TEIterator<'a> {
+    type Item = Segment;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let num_segs = match self.te {
+            TimelineEntry::RepeatedEntry { duration, .. } => 1 + duration,
+            TimelineEntry::SingleEntry { .. } => 1,
+        };
+        if self.cur_index < num_segs {
+            self.cur_index += 1;
+            Some(Segment {})
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AudioChannelConfiguration {
     #[serde(rename = "@schemeIdUri")]
