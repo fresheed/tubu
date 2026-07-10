@@ -138,17 +138,42 @@ pub struct SegmentTimeline {
     #[serde(rename = "$text")]
     pub text: Option<String>,
     #[serde(rename = "S")]
-    pub s: Vec<S>,
+    pub s: Vec<TimelineEntry>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct S {
+pub struct RawTimelineEntry {
     #[serde(rename = "@t")]
-    pub t: Option<String>,
+    pub timestamp: Option<usize>,
     #[serde(rename = "@d")]
-    pub d: String,
+    pub duration: usize,
     #[serde(rename = "@r")]
-    pub r: Option<String>,
+    pub repeats: Option<usize>,
+}
+
+ #[derive(Serialize, Deserialize, Debug)]
+ #[serde(from = "RawTimelineEntry")]
+ pub enum TimelineEntry {
+    RepeatedEntry { 
+        timestamp: usize,
+        duration: usize, 
+        extra_repeats: usize
+    },
+    SingleEntry { 
+        timestamp: Option<usize>,
+        duration: usize 
+    },
+}
+
+impl From<RawTimelineEntry> for TimelineEntry {
+    fn from(raw: RawTimelineEntry) -> Self {
+        if let Some(repeats) = raw.repeats {
+            Self::RepeatedEntry { timestamp: raw.timestamp.unwrap(), duration: raw.duration,
+                extra_repeats: repeats }
+        } else {
+            Self::SingleEntry { timestamp: raw.timestamp, duration: raw.duration }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
