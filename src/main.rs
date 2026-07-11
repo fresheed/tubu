@@ -1,7 +1,7 @@
-use std::{io::Cursor, path::PathBuf, time::{Duration, Instant}};
+use std::{fmt, io::Cursor, path::PathBuf, time::{Duration, Instant}};
 use reqwest::{Client, Response};
 use tokio::{fs::File, io, task::JoinSet};
-use tubu::tubu::MPD::{AdaptationSet, Mpd};
+use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{SegmentDownloadError, reqwest_err_into_sde}};
 use url::Url;
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
@@ -46,18 +46,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let results = tasks.join_all().await;
 
     for res in results {
-        ()
+        if let Err(err) = res {
+            println!("An error occured for one of segments: {}", err);
+        }
     };
 
     Ok(())
 }
 
-fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<String> {
-    // let video_aset = mpd.video_aset();
-    // for seg in video_aset.segment_names_iterator() {
-    //     println!("Video: {}", seg);
-    // }
-
+fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<(), SegmentDownloadError>> {
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
     for seg in aset.segment_names_iterator() {
@@ -67,30 +64,19 @@ fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<String>
     tasks
 }
 
-async fn download_segment(seg_url: Url, name: String, client: Client) -> String {
+async fn download_segment(seg_url: Url, name: String, client: Client) -> Result<(), SegmentDownloadError> {
     let start = Instant::now();
     let res = client.get(seg_url.clone()).send().await;
-    let end = Instant::now();
-    let dur = end.duration_since(start);
-    let dl_time = format!("Downloaded {} in {} sec", seg_url.to_string(), dur.as_secs().to_string());
-    let out = match res {
-        Ok(resp) => if resp.status() != 200 {            
-            format!("not 200: {}", resp.text().await.unwrap())
-        } else {
-            let path = PathBuf::from("outputs").join(name);
-            let Ok(mut file) = File::create(&path).await else {
-                return format!("error creating file {}", path.display());
-            };
-            let Ok(raw) = resp.bytes().await else {
-                return format!("could not get raw bytes for {}", path.display());
-            };
-            let mut raw_cursor = Cursor::new(raw);
-            io::copy(&mut raw_cursor, &mut file).await;
-            format!("200")            
-        }
-        Err(err) => format!("An error: {:?}", err),
-    };
-    let msg = format!("{} : {}", dl_time, out);
-    println!("{}", msg);
-    msg    
+    let dur = Instant::now().duration_since(start);    
+    let resp = res.and_then(|r| r.error_for_status())
+        .map_err(|e| reqwest_err_into_sde(e, dur.as_secs() as usize))?;
+    // at that point resp is a 2.. response
+
+    let path = PathBuf::from("outputs").join(name);
+    let mut file = File::create(&path).await?;
+    let raw = resp.bytes().await
+        .map_err(|e| reqwest_err_into_sde(e, dur.as_secs() as usize))?;
+    let mut raw_cursor = Cursor::new(raw);
+    let _ = io::copy(&mut raw_cursor, &mut file).await?;
+    Ok(())
 }
