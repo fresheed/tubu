@@ -46,15 +46,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let results = tasks.join_all().await;
 
     for res in results {
-        if let Err(err) = res {
-            println!("An error occured for one of segments: {}", err);
+        if let Err((name, err)) = res {
+            println!("An error occured for segment {}: {}", name, err);
         }
     };
 
     Ok(())
 }
 
-fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<(), SegmentDownloadError>> {
+fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<(), (String, SegmentDownloadError)>> {
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
     for seg in aset.segment_names_iterator() {
@@ -64,7 +64,15 @@ fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<
     tasks
 }
 
-async fn download_segment(seg_url: Url, name: String, client: Client) -> Result<(), SegmentDownloadError> {
+async fn download_segment(seg_url: Url, name: String, client: Client) -> Result<(), (String, SegmentDownloadError)> {
+    // Separating the actual download function to ease error handling.
+    // The name of the failing segment is needed for identifying required retries,
+    // as JoinSet does not preserve the order of tasks
+    download_segment_impl(seg_url, &name, client).await
+        .map_err(|e| (name, e))
+}
+
+async fn download_segment_impl(seg_url: Url, name: &String, client: Client) -> Result<(), SegmentDownloadError> {
     let start = Instant::now();
     let res = client.get(seg_url.clone()).send().await;
     let dur = Instant::now().duration_since(start);    
