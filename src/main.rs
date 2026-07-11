@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use reqwest::Response;
 use tokio::task::JoinSet;
 use tubu::tubu::MPD::{AdaptationSet, Mpd};
@@ -41,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mpd: Mpd = Mpd::parse(&content)?;
     // println!("{:?}", mpd);
 
-    let tasks = process_set(mpd.video_aset(), &dash_loc)    ;
+    let tasks = process_set(mpd.video_aset(), &dash_loc);
     let results = tasks.join_all().await;
 
     for res in results {
@@ -69,7 +71,10 @@ fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<
 }
 
 async fn download_segment(seg_url: Url) -> Result<Response, reqwest::Error> {
+    let start = Instant::now();
     let res = reqwest::get(seg_url.clone()).await;
-    println!("Downloaded {}", seg_url.to_string());
+    let end = Instant::now();
+    let dur = end.duration_since(start);
+    println!("Downloaded {} in {} sec", seg_url.to_string(), dur.as_secs().to_string());
     res
 }
