@@ -1,7 +1,7 @@
 use tubu::tubu::MPD::Mpd;
 use url::Url;
 
-const SERVER_URL: &str ="http://127.0.0.1:8080/";
+const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const MPD_PATH: &str = "dash/manifest.mpd";
 
 
@@ -21,6 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let video_aset = mpd.video_aset();
     println!("Path: {}", init_path);
     println!("Video: {:?}", video_aset);
+
+    for seg in video_aset.segment_names_iterator() {
+        println!("Video: {}", seg);
+    }
 
     Ok(())
 }

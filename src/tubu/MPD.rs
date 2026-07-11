@@ -138,7 +138,7 @@ pub struct SegmentTimeline {
     #[serde(rename = "$text")]
     pub text: Option<String>,
     #[serde(rename = "S")]
-    pub s: Vec<TimelineEntry>,
+    pub timeline: Vec<TimelineEntry>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -176,6 +176,12 @@ impl From<RawTimelineEntry> for TimelineEntry {
     }
 }
 
+impl TimelineEntry {    
+    fn iter(&self) -> TEIterator {
+        TEIterator { te: self, cur_index: 0 }
+    }
+}
+
 // Incomplete stub.
 // Only used for a dummy iterator over timeline entries
 pub struct Segment {
@@ -192,7 +198,7 @@ impl<'a> Iterator for TEIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let num_segs = match self.te {
-            TimelineEntry::RepeatedEntry { duration, .. } => 1 + duration,
+            TimelineEntry::RepeatedEntry { extra_repeats, .. } => 1 + extra_repeats,
             TimelineEntry::SingleEntry { .. } => 1,
         };
         if self.cur_index < num_segs {
@@ -201,6 +207,35 @@ impl<'a> Iterator for TEIterator<'a> {
         } else {
             None
         }
+    }
+}
+
+impl AdaptationSet {
+
+    // Lists the full names of segments, starting from the initialization one.
+    // Currently only substitutes a limited set of placeholders
+    pub fn segment_names_iterator(&self) -> impl Iterator<Item=String> {
+        let init_name_tpl = &self.representation.segment_template.initialization;
+        let base_name_tpl = &self.representation.segment_template.media;
+        
+        let init_segment = std::iter::once(self.subst_placeholers(init_name_tpl, 0));
+        let media_segments = 
+            self.representation.segment_template.segment_timeline.timeline
+            .iter().flat_map(|i| { i.iter() })
+            .enumerate().map(|(i, _e)| {
+                // count for media segments starts from 1
+                self.subst_placeholers(base_name_tpl, i + 1)
+            });        
+        init_segment.chain(media_segments)
+    }
+
+    fn subst_placeholers(&self, s: &str, index: usize) -> String {
+        // init segment:  init-$RepresentationID$.m4s
+        // media segment: chunk-$RepresentationID$-$Number%05d$.m4s
+        // the 5-padding is currently hardcoded
+        let padded_index = format!("{index:05}");
+        s.replace("$RepresentationID$", &self.representation.id)
+            .replace("$Number%05d$", &padded_index)
     }
 }
 
