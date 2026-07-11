@@ -1,7 +1,6 @@
-use std::time::{Duration, Instant};
-
-use reqwest::Response;
-use tokio::task::JoinSet;
+use std::{io::Cursor, path::PathBuf, time::{Duration, Instant}};
+use reqwest::{Client, Response};
+use tokio::{fs::File, io, task::JoinSet};
 use tubu::tubu::MPD::{AdaptationSet, Mpd};
 use url::Url;
 
@@ -47,34 +46,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let results = tasks.join_all().await;
 
     for res in results {
-        match res {
-            Ok(_resp) => (),
-            Err(_err) => println!("An error occured somewhere"),
-        }
+        ()
     };
 
     Ok(())
 }
 
-fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<Response, reqwest::Error>> {
+fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<String> {
     // let video_aset = mpd.video_aset();
     // for seg in video_aset.segment_names_iterator() {
     //     println!("Video: {}", seg);
     // }
 
     let mut tasks = JoinSet::new();
+    let client = reqwest::Client::new();
     for seg in aset.segment_names_iterator() {
         let url = dash_loc.segment_url(&seg);
-        tasks.spawn(download_segment(url));
+        tasks.spawn(download_segment(url, seg, client.clone()));
     }
     tasks
 }
 
-async fn download_segment(seg_url: Url) -> Result<Response, reqwest::Error> {
+async fn download_segment(seg_url: Url, name: String, client: Client) -> String {
     let start = Instant::now();
-    let res = reqwest::get(seg_url.clone()).await;
+    let res = client.get(seg_url.clone()).send().await;
     let end = Instant::now();
     let dur = end.duration_since(start);
-    println!("Downloaded {} in {} sec", seg_url.to_string(), dur.as_secs().to_string());
-    res
+    let dl_time = format!("Downloaded {} in {} sec", seg_url.to_string(), dur.as_secs().to_string());
+    let out = match res {
+        Ok(resp) => if resp.status() != 200 {            
+            format!("not 200: {}", resp.text().await.unwrap())
+        } else {
+            let path = PathBuf::from("outputs").join(name);
+            let Ok(mut file) = File::create(&path).await else {
+                return format!("error creating file {}", path.display());
+            };
+            let Ok(raw) = resp.bytes().await else {
+                return format!("could not get raw bytes for {}", path.display());
+            };
+            let mut raw_cursor = Cursor::new(raw);
+            io::copy(&mut raw_cursor, &mut file).await;
+            format!("200")            
+        }
+        Err(err) => format!("An error: {:?}", err),
+    };
+    let msg = format!("{} : {}", dl_time, out);
+    println!("{}", msg);
+    msg    
 }
