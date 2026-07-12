@@ -42,26 +42,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mpd: Mpd = Mpd::parse(&content)?;
     // println!("{:?}", mpd);
 
-    let tasks = process_set(mpd.video_aset(), &dash_loc);
-    let results = tasks.join_all().await;
-
-    for res in results {
-        if let Err((name, err)) = res {
-            println!("An error occured for segment {}: {}", name, err);
-        }
+    let video = mpd.video_aset();
+    let video_res = process_set(video, &dash_loc).await;
+    if video_res.is_ok() {
+        println!("AdaptationSet {} ({:?}) downloaded successfully", video.id, video.content_type);
+    } else {
+        println!("Download of AdaptationSet {} ({:?}) failed", video.id, video.content_type);
     };
-
+    
     Ok(())
+
 }
 
-fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) -> JoinSet<Result<(), (String, SegmentDownloadError)>> {
+async fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) 
+    // -> Result<(), (String, SegmentDownloadError)> 
+    -> Result<(), ()> 
+{
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
     for seg in aset.segment_names_iterator() {
         let url = dash_loc.segment_url(&seg);
         tasks.spawn(download_segment(url, seg, client.clone()));
+    };
+
+    let results = tasks.join_all().await;
+    let errors: Vec<_> = results.into_iter()
+        .filter(Result::is_err)
+        .map(Result::unwrap_err)
+        .collect();
+
+    if errors.is_empty() {        
+        Ok(())
+    } else {
+        // simplification until retries are implemented:
+        // just list occured errors and return non-informative Err
+        for (name, err) in errors {
+            println!("An error occured for segment {}: {}", name, err);            
+        };        
+        Err(())
     }
-    tasks
 }
 
 async fn download_segment(seg_url: Url, name: String, client: Client) -> Result<(), (String, SegmentDownloadError)> {
