@@ -8,6 +8,7 @@ const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const DASH_PATH: &str = "dash/";
 const MPD_NAME: &str = "manifest.mpd";
 
+#[derive(Clone)]
 struct DashLocation {
     dash_url: Url,
     mpd_name: String,
@@ -42,19 +43,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mpd: Mpd = Mpd::parse(&content)?;
     // println!("{:?}", mpd);
 
-    let video = mpd.video_aset();
-    let video_res = process_set(video, &dash_loc).await;
-    if video_res.is_ok() {
-        println!("AdaptationSet {} ({:?}) downloaded successfully", video.id, video.content_type);
-    } else {
-        println!("Download of AdaptationSet {} ({:?}) failed", video.id, video.content_type);
-    };
+    
+    let video_res = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
+    let audio_res = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
+    
+    let v = tokio::join!(video_res, audio_res);
     
     Ok(())
 
 }
 
-async fn process_set(aset: &AdaptationSet, dash_loc: &DashLocation) 
+async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<(), ()> {
+    let res = download_set(&aset, &dash_loc).await;
+    // so far "processing" is just reporting the result of the download
+    if res.is_ok() {
+        println!("AdaptationSet {} ({:?}) downloaded successfully", aset.id, aset.content_type);
+    } else {
+        println!("Download of AdaptationSet {} ({:?}) failed", aset.id, aset.content_type);
+    };
+    res
+}
+
+async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation) 
     // -> Result<(), (String, SegmentDownloadError)> 
     -> Result<(), ()> 
 {

@@ -56,14 +56,14 @@ pub struct Period {
     pub adaptation_set: Vec<AdaptationSet>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {
     VIDEO,
     AUDIO,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AdaptationSet {
     #[serde(rename = "@id")]
     pub id: String,
@@ -91,7 +91,7 @@ pub struct AdaptationSet {
     pub representation: Representation,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Representation {
     #[serde(rename = "@id")]
     pub id: String,
@@ -117,7 +117,7 @@ pub struct Representation {
     pub audio_channel_configuration: Option<AudioChannelConfiguration>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SegmentTemplate {
     #[serde(rename = "@timescale")]
     pub timescale: String,
@@ -133,7 +133,7 @@ pub struct SegmentTemplate {
     pub segment_timeline: SegmentTimeline,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SegmentTimeline {
     #[serde(rename = "$text")]
     pub text: Option<String>,
@@ -151,7 +151,7 @@ pub struct RawTimelineEntry {
     pub repeats: Option<usize>,
 }
 
- #[derive(Serialize, Deserialize, Debug)]
+ #[derive(Serialize, Deserialize, Debug, Clone)]
  #[serde(from = "RawTimelineEntry")]
  pub enum TimelineEntry {
     RepeatedEntry { 
@@ -239,7 +239,7 @@ impl AdaptationSet {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AudioChannelConfiguration {
     #[serde(rename = "@schemeIdUri")]
     pub scheme_id_uri: String,
