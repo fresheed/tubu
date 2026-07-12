@@ -1,7 +1,7 @@
 use std::{fmt, io::Cursor, path::{Path, PathBuf}, process::{ExitStatus, Stdio}, time::{Duration, Instant}};
 use reqwest::{Client, Response};
 use tokio::{fs::File, io, task::{JoinError, JoinSet}};
-use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{ManifestError, ProcessingError, SegmentDownloadError, TubuError, reqwest_err_into_sde}};
+use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{ManifestError, MuxingError, ProcessingError, SegmentDownloadError, TubuError, reqwest_err_into_sde}};
 use url::Url;
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
@@ -32,22 +32,17 @@ impl DashLocation {
 }
 
 
+// Can produce multiple errors (e.g. failing to download audio and process video simultaneously)
 #[tokio::main]
-async fn main() -> Result<(), TubuError> {
+async fn main() -> Result<(), Vec<TubuError>> {
     let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)
-        .map_err(|err| ManifestError::InvalidUrl {err})?;
-    let mpd = fetch_manifest(&dash_loc).await?;
+        .map_err(|err| vec!(TubuError::OnReadingManifest { err: ManifestError::InvalidUrl {err} }))?;
+    let mpd = fetch_manifest(&dash_loc).await        
+        .map_err(|err| vec!(TubuError::OnReadingManifest { err }))?;
     
-    let video_res = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
-    let audio_res = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
-    
-    let (rv, ra) = tokio::join!(video_res, audio_res);
-    // so far there is no cancellation implementation, and we don't expect processing to panic
-    let results = (rv.unwrap(), ra.unwrap());
-    let (Ok(video_path), Ok(audio_path)) = results else {
-        panic!("An error occured when generating one of the tracks");
-    };
-    let out_path = mux_tracks(&video_path, &audio_path);
+    let (video_path, audio_path) = process_video_audio(mpd, dash_loc).await?;
+    let out_path = mux_tracks(&video_path, &audio_path)
+        .map_err(|err| vec!(TubuError::OnMuxing { err }))?;
     println!("Download successful: {}", out_path.to_string_lossy());
     Ok(())
 }
@@ -59,9 +54,26 @@ async fn fetch_manifest(dash_loc: &DashLocation) -> Result<Mpd, ManifestError> {
     Ok(mpd)
 }
 
-fn mux_tracks(video_path: &Path, audio_path: &Path) -> PathBuf {
+async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation) -> Result<(PathBuf, PathBuf), Vec<TubuError>> {
+    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
+    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
+    
+    let (rv, ra) = tokio::join!(video_task, audio_task);
+    // so far there is no cancellation implementation, and we don't expect processing to panic
+    let results = (rv.unwrap(), ra.unwrap());
+
+    let errors = match results {
+        (Ok(path_video), Ok(path_audio)) => return Ok((path_video, path_audio)),
+        (Ok(_), Err(errs)) => vec!(errs),
+        (Err(errs), Ok(_)) => vec!(errs),
+        (Err(errs1), Err(errs2)) => vec!(errs1, errs2),
+    };
+    Err(errors)
+}
+
+fn mux_tracks(video_path: &Path, audio_path: &Path) -> Result<PathBuf, MuxingError> {
     let out_path = PathBuf::from("outputs").join("output.mp4");
-    // Could be nice to do this multiplexing by hand, 
+    // Could be nice to also implement this multiplexing, 
     // but for now we simply use ffmpeg    
     let args = ["-i", &video_path.to_string_lossy(), "-i", &audio_path.to_string_lossy(),
                            "-c", "copy", // no further processing
@@ -74,37 +86,32 @@ fn mux_tracks(video_path: &Path, audio_path: &Path) -> PathBuf {
                        .stderr(Stdio::null()) // ffmpeg logs to stderr
                        .spawn();
 
-    let Ok(mut proc) = proc else {
-        panic!("Error running ffmpeg");
+    let mut proc = proc.map_err(|err| MuxingError::FfmpegProcError { err })?;
+    let out_status = match proc.wait() {
+        Ok(status)  => status,
+        Err(err)    => return Err(MuxingError::FfmpegProcError { err })
     };
-  
-    let output = match proc.wait() {
-        Ok(output)  => output,
-        Err(err)    => panic!("ffmpeg exited with error: {}", err),
-    };
-    output.
-    
-
-    out_path    
-}
-
-async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<PathBuf, ()> {
-    let res = download_set(&aset, &dash_loc).await;    
-    if res.is_ok() {
-        println!("AdaptationSet {} ({:?}) downloaded successfully", aset.id, aset.content_type);
-        let track_path = concat_track(&aset).await;
-        let track_path = track_path.unwrap();
-        println!("Track for {:?} written successfully at {}", aset.content_type, track_path.to_string_lossy());
-        Ok(track_path)
+    if out_status.success() {
+        Ok(out_path)
     } else {
-        println!("Download of AdaptationSet {} ({:?}) failed", aset.id, aset.content_type);
-        Err(())
+        Err(MuxingError::FfmpegFailed { code: out_status })
     }
 }
 
-async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation) 
-    // -> Result<(), (String, SegmentDownloadError)> 
-    -> Result<(), ()> 
+async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<PathBuf, TubuError> {
+    let dl = download_set(&aset, &dash_loc).await;
+    match dl {        
+        Ok(_) => (), // no data upon success; assume all segment files are written to known dir
+        Err(errs) => {            
+            return Err(TubuError::OnLoadingSegments { aset, errs })
+        }
+    };
+    concat_track(&aset).await
+        .map_err(|err| TubuError::OnProcessingSegments { aset, err })
+}
+
+async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
+    -> Result<(), Vec<SegmentDownloadError>>
 {
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
@@ -116,18 +123,13 @@ async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
     let results = tasks.join_all().await;
     let errors: Vec<_> = results.into_iter()
         .filter(Result::is_err)
-        .map(Result::unwrap_err)
+        .map(|e| e.unwrap_err().1)
         .collect();
 
     if errors.is_empty() {
         Ok(())
     } else {
-        // simplification until retries are implemented:
-        // just list occured errors and return non-informative Err
-        for (name, err) in errors {
-            println!("An error occured for segment {}: {}", name, err);            
-        };        
-        Err(())
+        Err(errors)
     }
 }
 

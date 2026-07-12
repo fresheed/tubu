@@ -1,7 +1,7 @@
-use std::{fmt, process::ExitCode};
+use std::{fmt, process::{ExitCode, ExitStatus}};
 use tokio::io;
 
-use crate::tubu::MPD::InvalidMpd;
+use crate::tubu::MPD::{AdaptationSet, InvalidMpd};
 
 
 
@@ -72,14 +72,14 @@ pub enum ManifestError {
 #[derive(Debug)]
 pub enum MuxingError {
     FfmpegProcError { err: io::Error },
-    FfmpegFailed { code: ExitCode },
+    FfmpegFailed { code: ExitStatus },
 }
 
 #[derive(Debug)]
 pub enum TubuError {
     OnReadingManifest { err: ManifestError },
-    OnLoadingSegments { errs: Vec<SegmentDownloadError> },
-    OnProcessingSegments { errs: Vec<ProcessingError> },
+    OnLoadingSegments { aset: AdaptationSet, errs: Vec<SegmentDownloadError> },
+    OnProcessingSegments { aset: AdaptationSet, err: ProcessingError },
     OnMuxing { err: MuxingError },
 }
 
