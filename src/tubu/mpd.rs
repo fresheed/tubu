@@ -186,7 +186,7 @@ impl From<RawTimelineEntry> for TimelineEntry {
 }
 
 impl TimelineEntry {    
-    fn iter(&self) -> TEIterator {
+    fn iter(&self) -> TEIterator<'_> {
         TEIterator { te: self, cur_index: 0 }
     }
 }

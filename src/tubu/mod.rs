@@ -1,2 +1,2 @@
-pub mod MPD;
+pub mod mpd;
 pub mod errors;
