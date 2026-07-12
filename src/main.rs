@@ -1,7 +1,7 @@
-use std::{fmt, io::Cursor, path::{Path, PathBuf}, process::Stdio, time::{Duration, Instant}};
+use std::{fmt, io::Cursor, path::{Path, PathBuf}, process::{ExitStatus, Stdio}, time::{Duration, Instant}};
 use reqwest::{Client, Response};
 use tokio::{fs::File, io, task::{JoinError, JoinSet}};
-use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{ProcessingError, SegmentDownloadError, reqwest_err_into_sde}};
+use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{ManifestError, ProcessingError, SegmentDownloadError, TubuError, reqwest_err_into_sde}};
 use url::Url;
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
@@ -33,16 +33,10 @@ impl DashLocation {
 
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)?;
-    let resp = reqwest::get(dash_loc.mpd_url()).await?;
-    println!("MPD: {:?}", resp);
-    
-    // println!("{}", resp.text().await.unwrap());
-    let content = resp.text().await?;
-    let mpd: Mpd = Mpd::parse(&content)?;
-    // println!("{:?}", mpd);
-
+async fn main() -> Result<(), TubuError> {
+    let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)
+        .map_err(|err| ManifestError::InvalidUrl {err})?;
+    let mpd = fetch_manifest(&dash_loc).await?;
     
     let video_res = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
     let audio_res = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
@@ -56,7 +50,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_path = mux_tracks(&video_path, &audio_path);
     println!("Download successful: {}", out_path.to_string_lossy());
     Ok(())
+}
 
+async fn fetch_manifest(dash_loc: &DashLocation) -> Result<Mpd, ManifestError> {
+    let resp = reqwest::get(dash_loc.mpd_url()).await?;
+    let content = resp.text().await?;
+    let mpd = Mpd::parse(&content)?;
+    Ok(mpd)
 }
 
 fn mux_tracks(video_path: &Path, audio_path: &Path) -> PathBuf {
@@ -82,13 +82,14 @@ fn mux_tracks(video_path: &Path, audio_path: &Path) -> PathBuf {
         Ok(output)  => output,
         Err(err)    => panic!("ffmpeg exited with error: {}", err),
     };
+    output.
+    
 
     out_path    
 }
 
 async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<PathBuf, ()> {
-    let res = download_set(&aset, &dash_loc).await;
-    // so far "processing" is just reporting the result of the download
+    let res = download_set(&aset, &dash_loc).await;    
     if res.is_ok() {
         println!("AdaptationSet {} ({:?}) downloaded successfully", aset.id, aset.content_type);
         let track_path = concat_track(&aset).await;

@@ -1,5 +1,7 @@
-use std::fmt;
+use std::{fmt, process::ExitCode};
 use tokio::io;
+
+use crate::tubu::MPD::InvalidMpd;
 
 
 
@@ -57,5 +59,50 @@ pub enum ProcessingError {
 impl From<io::Error> for ProcessingError {
     fn from(err: io::Error) -> Self {
         Self::ConcatError { err }
+    }
+}
+
+#[derive(Debug)]
+pub enum ManifestError {
+    InvalidUrl { err: url::ParseError },
+    CannotAccess { err: reqwest::Error },
+    InvalidManifest { err: InvalidMpd },
+}
+
+#[derive(Debug)]
+pub enum MuxingError {
+    FfmpegProcError { err: io::Error },
+    FfmpegFailed { code: ExitCode },
+}
+
+#[derive(Debug)]
+pub enum TubuError {
+    OnReadingManifest { err: ManifestError },
+    OnLoadingSegments { errs: Vec<SegmentDownloadError> },
+    OnProcessingSegments { errs: Vec<ProcessingError> },
+    OnMuxing { err: MuxingError },
+}
+
+impl From<MuxingError> for TubuError {
+    fn from(err: MuxingError) -> Self {
+        Self::OnMuxing { err }
+    }
+}
+
+impl From<ManifestError> for TubuError {
+    fn from(err: ManifestError) -> Self {
+        Self::OnReadingManifest { err }
+    }
+}
+
+impl From<reqwest::Error> for ManifestError {
+    fn from(err: reqwest::Error) -> Self {
+        Self::CannotAccess { err }       
+    }
+}
+
+impl From<InvalidMpd> for ManifestError {
+    fn from(err: InvalidMpd) -> Self {
+        Self::InvalidManifest { err }
     }
 }
