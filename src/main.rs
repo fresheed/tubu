@@ -71,6 +71,7 @@ fn mux_tracks(video_path: &Path, audio_path: &Path) -> PathBuf {
     let proc = std::process::Command::new("ffmpeg")
                        .args(&args)
                        .stdout(Stdio::null())
+                       .stderr(Stdio::null()) // ffmpeg logs to stderr
                        .spawn();
 
     let Ok(mut proc) = proc else {
