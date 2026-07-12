@@ -1,7 +1,6 @@
 use std::fmt;
-
 use tokio::io;
-use url::Url;
+
 
 
 #[derive(Debug)]
@@ -47,5 +46,16 @@ pub fn reqwest_err_into_sde(err: reqwest::Error, dur_sec: usize) -> SegmentDownl
 impl From<io::Error> for SegmentDownloadError {
     fn from(err: io::Error) -> Self {
         Self::SaveError { err }
+    }
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    ConcatError { err: io::Error, },
+}
+
+impl From<io::Error> for ProcessingError {
+    fn from(err: io::Error) -> Self {
+        Self::ConcatError { err }
     }
 }

@@ -1,7 +1,7 @@
-use std::{fmt, io::Cursor, path::PathBuf, time::{Duration, Instant}};
+use std::{fmt, io::Cursor, path::{Path, PathBuf}, process::Stdio, time::{Duration, Instant}};
 use reqwest::{Client, Response};
-use tokio::{fs::File, io, task::JoinSet};
-use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{SegmentDownloadError, reqwest_err_into_sde}};
+use tokio::{fs::File, io, task::{JoinError, JoinSet}};
+use tubu::tubu::{MPD::{AdaptationSet, Mpd}, errors::{ProcessingError, SegmentDownloadError, reqwest_err_into_sde}};
 use url::Url;
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
@@ -47,21 +47,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let video_res = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
     let audio_res = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
     
-    let v = tokio::join!(video_res, audio_res);
-    
+    let (rv, ra) = tokio::join!(video_res, audio_res);
+    // so far there is no cancellation implementation, and we don't expect processing to panic
+    let results = (rv.unwrap(), ra.unwrap());
+    let (Ok(video_path), Ok(audio_path)) = results else {
+        panic!("An error occured when generating one of the tracks");
+    };
+    let out_path = mux_tracks(&video_path, &audio_path);
+    println!("Download successful: {}", out_path.to_string_lossy());
     Ok(())
 
 }
 
-async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<(), ()> {
+fn mux_tracks(video_path: &Path, audio_path: &Path) -> PathBuf {
+    let out_path = PathBuf::from("outputs").join("output.mp4");
+    // Could be nice to do this multiplexing by hand, 
+    // but for now we simply use ffmpeg    
+    let args = ["-i", &video_path.to_string_lossy(), "-i", &audio_path.to_string_lossy(),
+                           "-c", "copy", // no further processing
+                            "-map", "0:v:0", "-map", "1:a:0", // explicitly specify video/audio sources
+                            "-y", // overwrite existing output file
+                            &out_path.to_string_lossy()];
+    let proc = std::process::Command::new("ffmpeg")
+                       .args(&args)
+                       .stdout(Stdio::null())
+                       .spawn();
+
+    let Ok(mut proc) = proc else {
+        panic!("Error running ffmpeg");
+    };
+  
+    let output = match proc.wait() {
+        Ok(output)  => output,
+        Err(err)    => panic!("ffmpeg exited with error: {}", err),
+    };
+
+    out_path    
+}
+
+async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<PathBuf, ()> {
     let res = download_set(&aset, &dash_loc).await;
     // so far "processing" is just reporting the result of the download
     if res.is_ok() {
         println!("AdaptationSet {} ({:?}) downloaded successfully", aset.id, aset.content_type);
+        let track_path = concat_track(&aset).await;
+        let track_path = track_path.unwrap();
+        println!("Track for {:?} written successfully at {}", aset.content_type, track_path.to_string_lossy());
+        Ok(track_path)
     } else {
         println!("Download of AdaptationSet {} ({:?}) failed", aset.id, aset.content_type);
-    };
-    res
+        Err(())
+    }
 }
 
 async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation) 
@@ -81,7 +117,7 @@ async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
         .map(Result::unwrap_err)
         .collect();
 
-    if errors.is_empty() {        
+    if errors.is_empty() {
         Ok(())
     } else {
         // simplification until retries are implemented:
@@ -91,6 +127,22 @@ async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
         };        
         Err(())
     }
+}
+
+async fn concat_track(aset: &AdaptationSet) -> Result<PathBuf, ProcessingError> {
+    let name: String = format!("track_{}.mp4", aset.content_type);
+    let path = PathBuf::from("outputs").join(name);
+    let mut track = File::create(&path).await?;
+
+    // Segments must be concatenated in the exact order, 
+    // so we don't get much benefit from being async,
+    // except that audio and video can be processed at the same time
+    for seg in aset.segment_names_iterator() {
+        let seg_path = PathBuf::from("outputs").join(seg);
+        let mut seg_file = File::open(seg_path).await?;        
+        let _ = io::copy(&mut seg_file, &mut track).await?;
+    };
+    Ok(path)
 }
 
 async fn download_segment(seg_url: Url, name: String, client: Client) -> Result<(), (String, SegmentDownloadError)> {

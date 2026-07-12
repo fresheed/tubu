@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, fmt::Display};
 
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,15 @@ pub struct Period {
 pub enum ContentType {
     VIDEO,
     AUDIO,
+}
+
+impl Display for ContentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContentType::VIDEO => write!(f, "video"),
+            ContentType::AUDIO => write!(f, "audio"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
