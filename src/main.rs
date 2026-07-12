@@ -39,6 +39,8 @@ async fn main() -> Result<(), Vec<TubuError>> {
         .map_err(|err| vec!(TubuError::OnReadingManifest { err: ManifestError::InvalidUrl {err} }))?;
     let mpd = fetch_manifest(&dash_loc).await        
         .map_err(|err| vec!(TubuError::OnReadingManifest { err }))?;
+    // not printing anything here - user won't wait too long to reach this point
+    // println!("Manifest found");
     
     let (video_path, audio_path) = process_video_audio(mpd, dash_loc).await?;
     let out_path = mux_tracks(&video_path, &audio_path)
@@ -55,6 +57,7 @@ async fn fetch_manifest(dash_loc: &DashLocation) -> Result<Mpd, ManifestError> {
 }
 
 async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation) -> Result<(PathBuf, PathBuf), Vec<TubuError>> {
+    println!("Starting download...");
     let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
     let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
     
@@ -106,8 +109,14 @@ async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<Path
             return Err(TubuError::OnLoadingSegments { aset, errs })
         }
     };
-    concat_track(&aset).await
-        .map_err(|err| TubuError::OnProcessingSegments { aset, err })
+    println!("Downloaded {} segment", aset.content_type);
+    match concat_track(&aset).await {
+        Ok(track_path) => {
+            println!("Processed {} segment", aset.content_type);
+            Ok(track_path)
+        },
+        Err(err) => Err(TubuError::OnProcessingSegments { aset, err })
+    }
 }
 
 async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
