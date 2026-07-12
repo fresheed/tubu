@@ -13,6 +13,15 @@ pub enum SegmentDownloadError {
     SaveError { err: io::Error, },
 }
 
+impl SegmentDownloadError {
+    pub fn is_timeout(&self) -> bool {
+        match self {
+            SegmentDownloadError::Timeout { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for SegmentDownloadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

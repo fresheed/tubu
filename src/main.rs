@@ -119,26 +119,64 @@ async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<Path
     }
 }
 
+const NUM_ATTEMPTS: usize = 2;
+
 async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
     -> Result<(), Vec<SegmentDownloadError>>
+{    
+    let mut segs: Vec<String> = aset.segment_names_iterator().collect();
+    let mut attempts = NUM_ATTEMPTS;
+    // with the current implementation, it's easier to use "forgive timeouts flag"
+    // which is only false on the last iteration
+    // TODO: make it nicer?
+    while !segs.is_empty() && attempts > 0 {        
+        if attempts < NUM_ATTEMPTS { // only print it on actual retries
+            println!("Trying to download {} segment again, {} attempts left", aset.content_type, attempts);
+        };
+        match download_set_iter(segs, dash_loc, attempts > 1).await {
+            Ok(segs_left) => {
+                segs = segs_left;
+                attempts -= 1;                
+            },
+            Err(errs) => return Err(errs),
+        }
+    };
+
+    // the loop is exited when: 
+    // a) no segments are pending, or b) we exhausted retries.
+    // In the latter case, due to report_timeouts value, errors should've been raised at the last iteration.
+    // So at this point segs is empty.
+    assert!(segs.is_empty());
+    Ok(())
+}
+
+// returns either the list of timed out segments, or non-timeout errors if any
+async fn download_set_iter(segs: Vec<String>, dash_loc: &DashLocation, forgive_timeouts: bool)
+    -> Result<Vec<String>, Vec<SegmentDownloadError>>
 {
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
-    for seg in aset.segment_names_iterator() {
+    for seg in segs {
         let url = dash_loc.segment_url(&seg);
         tasks.spawn(download_segment(url, seg, client.clone()));
     };
 
     let results = tasks.join_all().await;
-    let errors: Vec<_> = results.into_iter()
+    let all_errors: Vec<_> = results.into_iter()
         .filter(Result::is_err)
-        .map(|e| e.unwrap_err().1)
+        .map(|e| e.unwrap_err())
         .collect();
 
-    if errors.is_empty() {
-        Ok(())
+    if all_errors.is_empty() {
+        return Ok(Vec::new())
+    };
+
+    // if the only errors are timeouts, we might retry later with timed out segments  
+    if all_errors.iter().all(|(_, err)| err.is_timeout()) && forgive_timeouts {
+        let segs_left = all_errors.into_iter().map(|(s, _)| s).collect();
+        Ok(segs_left)
     } else {
-        Err(errors)
+        Err(all_errors.into_iter().map(|(_, e)| e).collect())
     }
 }
 
