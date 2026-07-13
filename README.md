@@ -16,26 +16,28 @@ At the moment, a not-so-happy path is working:
 - tubu implements a retry logic, which is needed for slow servers, such as python's http.server (both single- and multithreaded)
 
 Future work (coming in the next few days):
-- complete environment setup with `docker compose`
-- making server and manifest location the input arguments
-- integration tests (at least binary match of downloaded individual segments)
-- graceful shutdown
-- resumable downloads: before starting, tubu should check whether (some of) segments have already been downloaded
-- final muxing without `ffmpeg`
+- [x] complete environment setup with `docker compose`
+- [ ] making server and manifest location the input arguments
+- [ ] integration tests (at least binary match of downloaded individual segments)
+- [ ] graceful shutdown
+- [ ] resumable downloads: before starting, tubu should check whether (some of) segments have already been downloaded
+- [ ] final muxing without `ffmpeg`
 
 ## Running
 
-**Prerequisites:**
+### Testing in an isolated environment
+
+The project provides a complete setup with a minimal server and sample video to work with. Assuming your system has Docker Compose, checking this setup amounts to simply cloning the repo and running `docker compose up` from the project root. 
+
+The server is a simple Python `http.server` (multithreaded). Upon starting, it preprocesses the sample video by creating the manifest file and the segment files. It serves at `localhost:8000`; it is forwarded to the host machine, and the server includes a simple `index.html` page, so you can see the video in your browser `localhost:8000` (you might want to turn the audio a bit down). 
+
+The main container installs `ffmpeg`, builds the project and immediately runs it. The resulting video is stored in `outputs/output.mp4`, which is mapped to the working directory, so you can also see it on the host machine. 
+
+### Manual setup 
+
+1. Make sure your system has the prerequisites
 - Rust toolchain supporting edition 2024 (rustc ≥ 1.85)
 - `ffmpeg` installed and available on `PATH`
-- A DASH source to download from — see below
-
-**Setup:**
-
-1. Create the output directory (not created automatically):
-   ```
-   mkdir outputs
-   ```
 2. tubu currently expects a DASH manifest at a hardcoded address:
    `http://127.0.0.1:8000/dash/manifest.mpd`, with segment files alongside it
    under `dash/`. For local testing, place a sample DASH stream (manifest +
@@ -44,7 +46,7 @@ Future work (coming in the next few days):
    python -m http.server 8000
    ```   
    
-   As mentioned above, completing the testing setup and parameterizing tubu with manifest location is future work coming soon.
+   As mentioned above, parameterizing tubu with manifest location is future work coming soon.
 3. Run tubu:
    ```
    cargo run
