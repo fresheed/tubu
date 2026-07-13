@@ -1,7 +1,7 @@
 use std::{io::Cursor, path::{Path, PathBuf}, process::Stdio, time::Instant};
 use reqwest::Client;
 use tokio::{fs::File, io, task::JoinSet};
-use tubu::tubu::{mpd::{AdaptationSet, Mpd}, errors::{ManifestError, MuxingError, ProcessingError, SegmentDownloadError, TubuError, reqwest_err_into_sde}};
+use tubu::{mpd::{AdaptationSet, Mpd}, errors::{ManifestError, MuxingError, ProcessingError, SegmentDownloadError, TubuError, reqwest_err_into_sde}};
 use url::Url;
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";

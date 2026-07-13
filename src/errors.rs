@@ -1,7 +1,7 @@
 use std::{fmt, process::{ExitStatus}};
 use tokio::io;
 
-use crate::tubu::mpd::{AdaptationSet, InvalidMpd};
+use crate::mpd::{AdaptationSet, InvalidMpd};
 
 
 #[derive(Debug)]
