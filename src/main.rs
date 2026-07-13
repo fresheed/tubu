@@ -35,6 +35,9 @@ impl DashLocation {
 // Can produce multiple errors (e.g. failing to download audio and process video simultaneously)
 #[tokio::main]
 async fn main() -> Result<(), Vec<TubuError>> {
+    tokio::fs::create_dir_all("outputs").await
+        .map_err(|err| vec!(TubuError::OnSetup { err }))?;
+
     let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)
         .map_err(|err| vec!(TubuError::OnReadingManifest { err: ManifestError::InvalidUrl {err} }))?;
     let mpd = fetch_manifest(&dash_loc).await        

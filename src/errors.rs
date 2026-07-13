@@ -86,6 +86,7 @@ pub enum MuxingError {
 
 #[derive(Debug)]
 pub enum TubuError {
+    OnSetup { err: io::Error },
     OnReadingManifest { err: ManifestError },
     OnLoadingSegments { aset: AdaptationSet, errs: Vec<SegmentDownloadError> },
     OnProcessingSegments { aset: AdaptationSet, err: ProcessingError },
