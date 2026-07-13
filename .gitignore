@@ -3,3 +3,4 @@ link_manifest.mpd
 outputs/
 compare_dirs.sh
 broken.log
+server/dash/

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DASH video</title>
+<script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+<style>
+  body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  video { width: 90vw; max-width: 1280px; }
+</style>
+</head>
+<body>
+<video id="player" controls></video>
+<script>
+  const player = dashjs.MediaPlayer().create();
+  player.initialize(document.querySelector("#player"), "dash/manifest.mpd", true);
+</script>
+</body>
+</html>
