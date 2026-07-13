@@ -127,7 +127,7 @@ async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
     let mut segs: Vec<String> = aset.segment_names_iterator().collect();
     let mut attempts = NUM_ATTEMPTS;
     // with the current implementation, it's easier to use "forgive timeouts flag"
-    // which is only false on the last iteration
+    // which is only set to false on the last iteration
     // TODO: make it nicer?
     while !segs.is_empty() && attempts > 0 {        
         if attempts < NUM_ATTEMPTS { // only print it on actual retries

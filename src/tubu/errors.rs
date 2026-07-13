@@ -4,10 +4,10 @@ use tokio::io;
 use crate::tubu::mpd::{AdaptationSet, InvalidMpd};
 
 
-
 #[derive(Debug)]
 pub enum SegmentDownloadError {
     // considering timeout separately, because we might retry upon it
+    // TODO: seems to be better to make it a separate error
     Timeout { dur_sec: usize, err: reqwest::Error },
     RequestError { err: reqwest::Error, },
     SaveError { err: io::Error, },
