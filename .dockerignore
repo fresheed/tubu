@@ -1,0 +1,6 @@
+target/
+outputs/
+server/dash/
+server/video.mp4
+*.log
+.git/
