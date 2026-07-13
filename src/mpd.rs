@@ -164,7 +164,7 @@ pub struct RawTimelineEntry {
  #[serde(from = "RawTimelineEntry")]
  pub enum TimelineEntry {
     RepeatedEntry { 
-        timestamp: usize,
+        timestamp: Option<usize>,
         duration: usize, 
         extra_repeats: usize
     },
@@ -177,7 +177,7 @@ pub struct RawTimelineEntry {
 impl From<RawTimelineEntry> for TimelineEntry {
     fn from(raw: RawTimelineEntry) -> Self {
         if let Some(repeats) = raw.repeats {
-            Self::RepeatedEntry { timestamp: raw.timestamp.unwrap(), duration: raw.duration,
+            Self::RepeatedEntry { timestamp: raw.timestamp, duration: raw.duration,
                 extra_repeats: repeats }
         } else {
             Self::SingleEntry { timestamp: raw.timestamp, duration: raw.duration }
