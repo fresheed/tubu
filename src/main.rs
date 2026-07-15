@@ -1,4 +1,5 @@
 use std::{path::{Path, PathBuf}, process::Stdio};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tokio::{fs::File, io};
 use tubu::{config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}};
 
@@ -35,13 +36,33 @@ async fn fetch_manifest(dash_loc: &DashLocation) -> Result<Mpd, ManifestError> {
 }
 
 async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation) -> Result<(PathBuf, PathBuf), Vec<TubuError>> {
-    println!("Starting download...");
-    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone()));
-    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc));
+    // Just use progress bar instead
+    // println!("Starting download...");
 
+    let total_segments = mpd.video_aset().segment_names_iterator().count() + mpd.audio_aset().segment_names_iterator().count();
+    let pb = ProgressBar::new(total_segments as u64);
+    pb.set_style(ProgressStyle::with_template("{msg}:{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len}")
+        .unwrap()
+        .progress_chars("#>-"));
+    pb.set_draw_target(ProgressDrawTarget::stdout());
+    pb.set_message("Download progress");
+    
+    // let pb_task = tokio::spawn(async move {   
+    //     for _ in 0..total_segments {
+    //         pb.inc(1);
+    //         tokio::time::sleep(Duration::from_millis(50)).await;
+    //     }
+    // });
+    // let _ = tokio::join!(pb_task);
 
-
+    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone(), pb.clone()));
+    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc, pb.clone()));
+        
     let (rv, ra) = tokio::join!(video_task, audio_task);
+    
+    // eprintln!("pb position: {}", pb.position());
+    pb.finish();
+
     // so far there is no cancellation implementation, and we don't expect processing to panic
     let results = (rv.unwrap(), ra.unwrap());
 
@@ -54,18 +75,24 @@ async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation) -> Result<(PathBu
     Err(errors)
 }
 
-async fn process_set(aset: AdaptationSet, dash_loc: DashLocation) -> Result<PathBuf, TubuError> {
-    let dl = download_set(&aset, &dash_loc).await;
+async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, pb: ProgressBar) -> Result<PathBuf, TubuError> {
+
+    let pbc = pb.clone();
+    let dl = download_set(&aset, &dash_loc,
+        move || { pbc.inc(1); }).await;
     match dl {        
         Ok(_) => (), // no data upon success; assume all segment files are written to known dir
         Err(errs) => {            
             return Err(TubuError::OnLoadingSegments { aset, errs })
         }
     };
-    println!("Downloaded {} segment", aset.content_type);
+    // Now this is replaced by the unified progress bar
+    // println!("Downloaded {} segment", aset.content_type);
     match concat_track(&aset).await {
         Ok(track_path) => {
-            println!("Processed {} segment", aset.content_type);
+            // it is a bit misleading, as these messages will be displayed above the progress bar
+            let msg = format!("Processed {} segment", aset.content_type);
+            pb.println(msg);
             Ok(track_path)
         },
         Err(err) => Err(TubuError::OnProcessingSegments { aset, err })

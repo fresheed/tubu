@@ -8,8 +8,9 @@ use crate::{config::DashLocation, errors::{SegmentDownloadError, reqwest_err_int
 
 const NUM_ATTEMPTS: usize = 2;
 
-pub async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
+pub async fn download_set<T>(aset: &AdaptationSet, dash_loc: &DashLocation, cb: T)
     -> Result<(), Vec<SegmentDownloadError>>
+    where T: FnOnce() + Clone + Send + 'static
 {    
     let mut segs: Vec<String> = aset.segment_names_iterator().collect();
     let mut attempts = NUM_ATTEMPTS;
@@ -20,7 +21,7 @@ pub async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
         if attempts < NUM_ATTEMPTS { // only print it on actual retries
             println!("Trying to download {} segment again, {} attempts left", aset.content_type, attempts);
         };
-        match download_set_iter(segs, dash_loc, attempts > 1).await {
+        match download_set_iter(segs, dash_loc, attempts > 1, cb.clone()).await {
             Ok(segs_left) => {
                 segs = segs_left;
                 attempts -= 1;                
@@ -38,14 +39,16 @@ pub async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation)
 }
 
 // returns either the list of timed out segments, or non-timeout errors if any
-async fn download_set_iter(segs: Vec<String>, dash_loc: &DashLocation, forgive_timeouts: bool)
+async fn download_set_iter<T>(segs: Vec<String>, dash_loc: &DashLocation, forgive_timeouts: bool,
+cb: T)
     -> Result<Vec<String>, Vec<SegmentDownloadError>>
+    where T: FnOnce() + Clone + Send + 'static
 {
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
     for seg in segs {
         let url = dash_loc.segment_url(&seg);
-        tasks.spawn(download_segment(url, seg, client.clone()));
+        tasks.spawn(download_segment(url, seg, client.clone(), cb.clone()));
     };
 
     let results = tasks.join_all().await;
@@ -67,15 +70,21 @@ async fn download_set_iter(segs: Vec<String>, dash_loc: &DashLocation, forgive_t
     }
 }
 
-async fn download_segment(seg_url: Url, name: String, client: Client) -> Result<(), (String, SegmentDownloadError)> {
+async fn download_segment<T: FnOnce()>(seg_url: Url, name: String, client: Client, cb: T)
+    -> Result<(), (String, SegmentDownloadError)> 
+{
     // Separating the actual download function to ease error handling.
     // The name of the failing segment is needed for identifying required retries,
     // as JoinSet does not preserve the order of tasks
-    download_segment_impl(seg_url, &name, client).await
-        .map_err(|e| (name, e))
+    let _ = download_segment_impl(seg_url, &name, client).await
+        .map_err(|e| (name, e))?;
+    cb();
+    Ok(())
 }
 
-async fn download_segment_impl(seg_url: Url, name: &String, client: Client) -> Result<(), SegmentDownloadError> {
+async fn download_segment_impl(seg_url: Url, name: &String, client: Client)
+    -> Result<(), SegmentDownloadError> 
+{
     let start = Instant::now();
     let res = client.get(seg_url.clone()).send().await;
     let dur = Instant::now().duration_since(start);    
