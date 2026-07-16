@@ -109,10 +109,10 @@ async fn download_segment_impl(seg_url: Url, name: &String, client: Client, cnc_
     as_cancellable(save_segment(raw, name)).await
 }
 
-const MAX_FETCH_DUR_SEC: u64 = 10;
+const MAX_FETCH_DUR: Duration = Duration::from_secs(10);
 
 async fn fetch_segment(seg_url: Url, client: Client) -> Result<Bytes, SegmentDownloadError> {
-    timeout(Duration::from_secs(MAX_FETCH_DUR_SEC), fetch_segment_impl(seg_url, client)).await
+    timeout(MAX_FETCH_DUR, fetch_segment_impl(seg_url, client)).await
         .map_err(|e| SegmentDownloadError::Timeout { err: None })?
 }
 
