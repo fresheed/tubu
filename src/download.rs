@@ -1,7 +1,7 @@
-use std::{io::Cursor, path::PathBuf, time::Instant};
-
+use std::{io::Cursor, path::PathBuf, time::{Duration, Instant}};
+use tokio_util::bytes::Bytes;
 use reqwest::Client;
-use tokio::{fs::File, io, task::JoinSet};
+use tokio::{fs::File, io, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -105,26 +105,40 @@ async fn download_segment_impl(seg_url: Url, name: &String, client: Client, cnc_
     -> CancellableResult<(), SegmentDownloadError> 
 {
     // Only cancel the web request; if it's already retrieved, save the content regardless of cancellation
-    let (dur, resp) = unless_cancelled(fetch_segment(seg_url, client), &cnc_tok).await?;
-    as_cancellable(save_segment(name, dur, resp)).await
+    let raw = unless_cancelled(fetch_segment(seg_url, client), &cnc_tok).await?;
+    as_cancellable(save_segment(raw, name)).await
 }
 
-async fn fetch_segment(seg_url: Url, client: Client) 
-    -> Result<(std::time::Duration, reqwest::Response), SegmentDownloadError> {
-    let start = Instant::now();
-    let res = client.get(seg_url.clone()).send().await;
-    let dur = Instant::now().duration_since(start);
+const MAX_FETCH_DUR_SEC: u64 = 10;
+
+async fn fetch_segment(seg_url: Url, client: Client) -> Result<Bytes, SegmentDownloadError> {
+    timeout(Duration::from_secs(MAX_FETCH_DUR_SEC), fetch_segment_impl(seg_url, client)).await
+        .map_err(|e| SegmentDownloadError::Timeout { err: None })?
+}
+
+async fn fetch_segment_impl(seg_url: Url, client: Client) -> Result<Bytes, SegmentDownloadError> {    
+    /* There are two kinds of timeouts being accounted for:
+       - timeout for TCP handshake occuring upon get(..).send(),
+         which is triggered at OS level and presented as reqwest's Err         
+       - general timeout configured at the tokio level,
+         which limits the total duration of everything 
+         involved in fetching the segment's binary data.
+         reqwest does not deal with this at all.
+       Note that tubu ends up representing both as SegmentDownloadError::Timeout,
+       because they are handled in a same way (retrying a fixed number of times). */
+       
+    let res = client.get(seg_url.clone()).send().await;    
     let resp = res.and_then(|r| r.error_for_status())
-        .map_err(|e| reqwest_err_into_sde(e, dur.as_secs() as usize))?;
-    Ok((dur, resp))
+        .map_err(reqwest_err_into_sde)?;
+    let raw = resp.bytes().await
+        .map_err(reqwest_err_into_sde)?;
+    Ok(raw)
 }
 
-async fn save_segment(name: &String, dur: std::time::Duration, resp: reqwest::Response)
+async fn save_segment(raw: Bytes, name: &String)
 -> Result<(), SegmentDownloadError> {
     let path = PathBuf::from("outputs").join(name);
     let mut file = File::create(&path).await?;
-    let raw = resp.bytes().await
-        .map_err(|e| reqwest_err_into_sde(e, dur.as_secs() as usize))?;
     let mut raw_cursor = Cursor::new(raw);
     let _ = io::copy(&mut raw_cursor, &mut file).await?;
     Ok(())

@@ -8,7 +8,7 @@ use crate::mpd::{AdaptationSet, InvalidMpd};
 pub enum SegmentDownloadError {
     // considering timeout separately, because we might retry upon it
     // TODO: seems to be better to make it a separate error
-    Timeout { dur_sec: usize, err: reqwest::Error },
+    Timeout { err: Option<reqwest::Error> },
     RequestError { err: reqwest::Error, },
     SaveError { err: io::Error, },
 }
@@ -25,8 +25,10 @@ impl SegmentDownloadError {
 impl fmt::Display for SegmentDownloadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SegmentDownloadError::Timeout { dur_sec, err } => 
-                write!(f, "Timed out ({} seconds elapsed): {}", dur_sec, err),
+            SegmentDownloadError::Timeout { err: Some(err) } => 
+                write!(f, "Timed out: {}", err),
+            SegmentDownloadError::Timeout { err: None } => 
+                write!(f, "Timed out"),
             SegmentDownloadError::RequestError { err } => 
                 write!(f, "Request error: {}", err),
             SegmentDownloadError::SaveError { err } => 
@@ -38,7 +40,8 @@ impl fmt::Display for SegmentDownloadError {
 impl std::error::Error for SegmentDownloadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            SegmentDownloadError::Timeout { err , .. } => Some(err),
+            SegmentDownloadError::Timeout { err } => err.as_ref()
+                .map(|e| e as &dyn std::error::Error),
             SegmentDownloadError::RequestError { err } => Some(err),
             SegmentDownloadError::SaveError { err } => Some(err),
         }
@@ -46,9 +49,9 @@ impl std::error::Error for SegmentDownloadError {
 }
 
 // not using Into trait, because we also want to pass duration
-pub fn reqwest_err_into_sde(err: reqwest::Error, dur_sec: usize) -> SegmentDownloadError {
+pub fn reqwest_err_into_sde(err: reqwest::Error) -> SegmentDownloadError {
     if err.is_timeout() {
-        SegmentDownloadError::Timeout { dur_sec, err }
+        SegmentDownloadError::Timeout { err: Some(err) }
     } else {
         SegmentDownloadError::RequestError { err }
     }
