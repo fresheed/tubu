@@ -1426,6 +1426,7 @@ dependencies = [
  "reqwest",
  "serde",
  "tokio",
+ "tokio-util",
  "url",
 ]
 

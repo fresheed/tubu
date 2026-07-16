@@ -1,16 +1,49 @@
-use std::{path::{Path, PathBuf}, process::Stdio};
+use std::{path::{Path, PathBuf}, process::{ExitCode, Stdio}};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use tokio::{fs::File, io};
-use tubu::{config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}};
+use tokio::{fs::File, io, signal};
+use tokio_util::sync::CancellationToken;
+use tubu::{cancellation::CancellableResult, config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}};
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const DASH_PATH: &str = "dash/";
 const MPD_NAME: &str = "manifest.mpd";
 
 
-// Can produce multiple errors (e.g. failing to download audio and process video simultaneously)
 #[tokio::main]
-async fn main() -> Result<(), Vec<TubuError>> {
+async fn main() -> ExitCode {
+    match tubu_main().await {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(None) => {
+            println!("Download cancelled");
+            ExitCode::FAILURE
+        },
+        Err(Some(errs)) => {
+            // TODO: improve error printing
+            println!("Errors occured: {:?}", errs);
+            ExitCode::FAILURE
+        }        
+    }
+}
+
+// Can produce multiple errors (e.g. failing to download audio and process video simultaneously)
+async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
+    let cnc_tok = CancellationToken::new();
+
+    let cnc_tok2 = cnc_tok.clone();
+    let cnc_handle = tokio::spawn(async move {        
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                cnc_tok2.cancel();
+                println!("Cancelling the download...");
+                Ok(())
+            },
+            Err(err) => {
+                eprintln!("Unable to listen for shutdown signal: {}", err);
+                Err(TubuError::OnSetup { err })
+            },
+        }
+    });
+
     tokio::fs::create_dir_all("outputs").await
         .map_err(|err| vec!(TubuError::OnSetup { err }))?;
 
@@ -21,10 +54,12 @@ async fn main() -> Result<(), Vec<TubuError>> {
     // not printing anything here - user won't wait too long to reach this point
     // println!("Manifest found");
     
-    let (video_path, audio_path) = process_video_audio(mpd, dash_loc).await?;
+    let (video_path, audio_path) = process_video_audio(mpd, dash_loc, cnc_tok).await?;
     let out_path = mux_tracks(&video_path, &audio_path)
         .map_err(|err| vec!(TubuError::OnMuxing { err }))?;
     println!("Download successful: {}", out_path.to_string_lossy());
+
+    let _ = cnc_handle.abort();
     Ok(())
 }
 
@@ -35,10 +70,32 @@ async fn fetch_manifest(dash_loc: &DashLocation) -> Result<Mpd, ManifestError> {
     Ok(mpd)
 }
 
-async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation) -> Result<(PathBuf, PathBuf), Vec<TubuError>> {
+async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation, cnc_tok: CancellationToken)
+    -> CancellableResult<(PathBuf, PathBuf), Vec<TubuError>> 
+{
     // Just use progress bar instead
     // println!("Starting download...");
+    let pb = setup_progressbar(&mpd);
 
+    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone(), pb.clone(), cnc_tok.clone()));
+    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc, pb.clone(), cnc_tok.clone()));        
+    let (rv, ra) = tokio::join!(video_task, audio_task);    
+    pb.finish();
+    // cancellation is graceful via token, and we don't expect processing to panic
+    let results = (rv.unwrap(), ra.unwrap());
+
+    let errors = match results {
+        (Ok(path_video), Ok(path_audio)) => return Ok((path_video, path_audio)),
+        (Err(None), _) => return Err(None),
+        (_, Err(None)) => return Err(None),
+        (Ok(_), Err(Some(errs))) => vec!(errs),
+        (Err(Some(errs)), Ok(_)) => vec!(errs),
+        (Err(Some(errs1)), Err(Some(errs2))) => vec!(errs1, errs2),
+    };
+    Err(Some(errors))
+}
+
+fn setup_progressbar(mpd: &Mpd) -> ProgressBar {
     let total_segments = mpd.video_aset().segment_names_iterator().count() + mpd.audio_aset().segment_names_iterator().count();
     let pb = ProgressBar::new(total_segments as u64);
     pb.set_style(ProgressStyle::with_template("{msg}:{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len}")
@@ -46,44 +103,21 @@ async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation) -> Result<(PathBu
         .progress_chars("#>-"));
     pb.set_draw_target(ProgressDrawTarget::stdout());
     pb.set_message("Download progress");
-    
-    // let pb_task = tokio::spawn(async move {   
-    //     for _ in 0..total_segments {
-    //         pb.inc(1);
-    //         tokio::time::sleep(Duration::from_millis(50)).await;
-    //     }
-    // });
-    // let _ = tokio::join!(pb_task);
-
-    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone(), pb.clone()));
-    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc, pb.clone()));
-        
-    let (rv, ra) = tokio::join!(video_task, audio_task);
-    
-    // eprintln!("pb position: {}", pb.position());
-    pb.finish();
-
-    // so far there is no cancellation implementation, and we don't expect processing to panic
-    let results = (rv.unwrap(), ra.unwrap());
-
-    let errors = match results {
-        (Ok(path_video), Ok(path_audio)) => return Ok((path_video, path_audio)),
-        (Ok(_), Err(errs)) => vec!(errs),
-        (Err(errs), Ok(_)) => vec!(errs),
-        (Err(errs1), Err(errs2)) => vec!(errs1, errs2),
-    };
-    Err(errors)
+    pb
 }
 
-async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, pb: ProgressBar) -> Result<PathBuf, TubuError> {
+async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, pb: ProgressBar, cnc_tok: CancellationToken) 
+    -> CancellableResult<PathBuf, TubuError> 
+{
 
     let pbc = pb.clone();
     let dl = download_set(&aset, &dash_loc,
-        move || { pbc.inc(1); }).await;
+        move || { pbc.inc(1); }, cnc_tok).await;
     match dl {        
         Ok(_) => (), // no data upon success; assume all segment files are written to known dir
-        Err(errs) => {            
-            return Err(TubuError::OnLoadingSegments { aset, errs })
+        Err(None) => return Err(None),
+        Err(Some(errs)) => {            
+            return Err(Some(TubuError::OnLoadingSegments { aset, errs }))
         }
     };
     // Now this is replaced by the unified progress bar
@@ -95,7 +129,7 @@ async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, pb: ProgressBa
             pb.println(msg);
             Ok(track_path)
         },
-        Err(err) => Err(TubuError::OnProcessingSegments { aset, err })
+        Err(err) => Err(Some(TubuError::OnProcessingSegments { aset, err }))
     }
 }
 

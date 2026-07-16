@@ -8,6 +8,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 quick-xml = { version = "0.37", features = ["serialize"] }
 url = "2.5.8"
 indicatif = "0.17"
+tokio-util = "0.7"
 
 [dependencies.tokio]
 version = "1"
