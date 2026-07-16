@@ -1,9 +1,10 @@
 # tubu - an async DASH Downloader
 
 A downloader for DASH-streamed video.
+
 This is a project for exploring async Rust w/ tokio. 
-Specifically, we use asynchronicity to improve performance on:
-- downloads of individual segments of audio/video tracks. Here, we also implement retry logic: if some track's segments are timed out, we restart the download task with the remaining segments, repeating it a fixed number of times until giving up
+Specifically, asynchronicity improves performance on:
+- downloads of individual segments of audio/video tracks
 - saving segments to separate files
 - less important: concatenating segments into the audio and video tracks (only 2 tasks executing simultaneously)
 
@@ -13,13 +14,18 @@ At the moment, a not-so-happy path is working:
 - DASH server, as well as location of .mpd manifest file in it, is hardcoded
 - With `cargo run`, tubu fetches the manifest file, downloads the audio and video tracks' segments, combines them into two tracks, and finally calls `ffmpeg` to obtain the complete video file
 - Each of these steps might fail, which is accounted for with a custom error type. The implementation is not supposed to panic. 
-- tubu implements a retry logic, which is needed for slow servers, such as python's http.server (both single- and multithreaded)
+- tubu implements a retry logic, which is needed for slow servers, such as python's `http.server`(both single- and multithreaded)
+- The download process can be gracefully cancelled with Ctrl-C. The behavior depends on when the cancellation occurs:
+   - If it happens before the download starts, the process stops there
+   - If a given segment is being fetched from the server, the corresponding task is cancelled.
+   - If a segment is already fetched, but not saved to the file yet, cancellation is ignored (at least for this specific segment), and it is saved
+   - If all segments are saved, the cancellation is ignored, and tubu produces the final file
 
 Future work (coming in the next few days):
 - [x] complete environment setup with `docker compose`
 - [ ] making server and manifest location the input arguments
 - [ ] integration tests (at least binary match of downloaded individual segments)
-- [ ] graceful shutdown
+- [x] graceful shutdown
 - [ ] resumable downloads: before starting, tubu should check whether (some of) segments have already been downloaded
 - [ ] final muxing without `ffmpeg`
 
