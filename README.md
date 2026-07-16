@@ -10,16 +10,21 @@ Specifically, asynchronicity improves performance on:
 
 ## Current status and future work
 
+Overall, upon `cargo run`, tubu:
+1. fetches the manifest file
+2. downloads the audio and video tracks' segments into separate files
+3. combines them into two tracks
+4. calls `ffmpeg` to obtain the complete video file
+
 At the moment, a not-so-happy path is working:
 - DASH server, as well as location of .mpd manifest file in it, is hardcoded
-- With `cargo run`, tubu fetches the manifest file, downloads the audio and video tracks' segments, combines them into two tracks, and finally calls `ffmpeg` to obtain the complete video file
-- Each of these steps might fail, which is accounted for with a custom error type. The implementation is not supposed to panic. 
 - tubu implements a retry logic, which is needed for slow servers, such as python's `http.server`(both single- and multithreaded)
 - The download process can be gracefully cancelled with Ctrl-C. The behavior depends on when the cancellation occurs:
    - If it happens before the download starts, the process stops there
    - If a given segment is being fetched from the server, the corresponding task is cancelled.
    - If a segment is already fetched, but not saved to the file yet, cancellation is ignored (at least for this specific segment), and it is saved
    - If all segments are saved, the cancellation is ignored, and tubu produces the final file
+- The errors occurring at any stage are propagated to the main function, except for timeouts that are treated differently as described above (might need to clean up the error types to improve it)
 
 Future work (coming in the next few days):
 - [x] complete environment setup with `docker compose`
