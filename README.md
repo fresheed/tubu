@@ -18,7 +18,7 @@ Overall, upon `cargo run`, tubu:
 
 At the moment, a not-so-happy path is working:
 - DASH server, as well as location of .mpd manifest file in it, is hardcoded
-- tubu implements a retry logic, which is needed for slow servers, such as python's `http.server`(both single- and multithreaded)
+- tubu implements a retry logic, which is needed for slow servers, such as python's `http.server`(both single- and multithreaded). Namely, if downloads of some track's segments are timed out, we restart the download task with the remaining segments, repeating it a fixed number of times until giving up
 - The download process can be gracefully cancelled with Ctrl-C. The behavior depends on when the cancellation occurs:
    - If it happens before the download starts, the process stops there
    - If a given segment is being fetched from the server, the corresponding task is cancelled.
