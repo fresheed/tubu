@@ -3,7 +3,7 @@
 A downloader for DASH-streamed video.
 
 This is a project for exploring async Rust w/ tokio. 
-Specifically, asynchronicity improves performance on:
+It uses asychronicity to improve performance on:
 - downloads of individual segments of audio/video tracks
 - saving segments to separate files
 - less important: concatenating segments into the audio and video tracks (only 2 tasks executing simultaneously)
