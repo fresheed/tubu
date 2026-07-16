@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, process::{ExitCode, Stdio}};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tokio::{fs::File, io, signal};
 use tokio_util::sync::CancellationToken;
-use tubu::{cancellation::CancellableResult, config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}};
+use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}};
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const DASH_PATH: &str = "dash/";
@@ -46,20 +46,24 @@ async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
 
     tokio::fs::create_dir_all("outputs").await
         .map_err(|err| vec!(TubuError::OnSetup { err }))?;
-
+        
     let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)
         .map_err(|err| vec!(TubuError::OnReadingManifest { err: ManifestError::InvalidUrl {err} }))?;
-    let mpd = fetch_manifest(&dash_loc).await        
-        .map_err(|err| vec!(TubuError::OnReadingManifest { err }))?;
-    // not printing anything here - user won't wait too long to reach this point
-    // println!("Manifest found");
+    let mpd = unless_cancelled(fetch_manifest(&dash_loc), &cnc_tok).await        
+        .map_err(|oerr| oerr.map(|err| vec!(TubuError::OnReadingManifest { err })))?;
     
     let (video_path, audio_path) = process_video_audio(mpd, dash_loc, cnc_tok).await?;
+
+    // Cancellation is only accounted for if happened before/during segments download.
+    // Everything after is relatively quick, and it's easier to just complete the process
+    // TODO: it might change for muxing large files
+    let _ = cnc_handle.abort();
+
     let out_path = mux_tracks(&video_path, &audio_path)
         .map_err(|err| vec!(TubuError::OnMuxing { err }))?;
     println!("Download successful: {}", out_path.to_string_lossy());
 
-    let _ = cnc_handle.abort();
+    
     Ok(())
 }
 
