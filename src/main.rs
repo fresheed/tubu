@@ -1,8 +1,7 @@
 use std::{path::{Path, PathBuf}, process::{ExitCode, Stdio}};
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use tokio::{fs::File, io, signal};
 use tokio_util::sync::CancellationToken;
-use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}};
+use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}, printer::{self, PrintTx, PrinterMessage}};
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const DASH_PATH: &str = "dash/";
@@ -27,32 +26,19 @@ async fn main() -> ExitCode {
 
 // Can produce multiple errors (e.g. failing to download audio and process video simultaneously)
 async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
-    let cnc_tok = CancellationToken::new();
+    let (printer_fut, tx) = printer::create_printer();
+    let print_handle = tokio::spawn(printer_fut);
 
-    let cnc_tok2 = cnc_tok.clone();
-    let cnc_handle = tokio::spawn(async move {        
-        match signal::ctrl_c().await {
-            Ok(()) => {
-                cnc_tok2.cancel();
-                println!("Cancelling the download...");
-                Ok(())
-            },
-            Err(err) => {
-                eprintln!("Unable to listen for shutdown signal: {}", err);
-                Err(TubuError::OnSetup { err })
-            },
-        }
-    });
+    let (cnc_fut, cnc_tok) = create_ctrl_c_handler(tx.clone());
+    let cnc_handle = tokio::spawn(cnc_fut);
 
     tokio::fs::create_dir_all("outputs").await
         .map_err(|err| vec!(TubuError::OnSetup { err }))?;
         
-    let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)
-        .map_err(|err| vec!(TubuError::OnReadingManifest { err: ManifestError::InvalidUrl {err} }))?;
-    let mpd = unless_cancelled(fetch_manifest(&dash_loc), &cnc_tok).await        
+    let (dash_loc, mpd) = unless_cancelled(fetch_manifest(), &cnc_tok).await        
         .map_err(|oerr| oerr.map(|err| vec!(TubuError::OnReadingManifest { err })))?;
     
-    let (video_path, audio_path) = process_video_audio(mpd, dash_loc, cnc_tok).await?;
+    let (video_path, audio_path) = process_video_audio(mpd, dash_loc, cnc_tok, tx).await?;
 
     // Cancellation is only accounted for if happened before/during segments download.
     // Everything after is relatively quick, and it's easier to just complete the process
@@ -62,29 +48,53 @@ async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
     let out_path = mux_tracks(&video_path, &audio_path)
         .map_err(|err| vec!(TubuError::OnMuxing { err }))?;
     println!("Download successful: {}", out_path.to_string_lossy());
-
     
+    let _ = tokio::join!(print_handle);
     Ok(())
 }
 
-async fn fetch_manifest(dash_loc: &DashLocation) -> Result<Mpd, ManifestError> {
+fn create_ctrl_c_handler(tx: PrintTx) -> (impl Future<Output = Result<(), TubuError>>, CancellationToken) {
+    let tok = CancellationToken::new();
+    let tok2 = tok.clone();
+    let handler = async move {
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                tok2.cancel();
+                let _ = tx.send(PrinterMessage::Text("Cancelling the download...".to_string())).await;
+                let _ = tx.send(PrinterMessage::FinalizePB).await;
+                Ok(())
+            },
+            Err(err) => {
+                eprintln!("Unable to listen for shutdown signal: {}", err);
+                Err(TubuError::OnSetup { err })
+            },
+        }    
+    };
+    (handler, tok)
+}
+
+async fn fetch_manifest() -> Result<(DashLocation, Mpd), ManifestError> {
+    let dash_loc = DashLocation::new(SERVER_URL, DASH_PATH, MPD_NAME)
+        .map_err(|err| ManifestError::InvalidUrl {err})?;
     let resp = reqwest::get(dash_loc.mpd_url()).await?;
     let content = resp.text().await?;
     let mpd = Mpd::parse(&content)?;
-    Ok(mpd)
+    Ok((dash_loc, mpd))
 }
 
-async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation, cnc_tok: CancellationToken)
+async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation,
+                             cnc_tok: CancellationToken, tx: PrintTx)
     -> CancellableResult<(PathBuf, PathBuf), Vec<TubuError>> 
 {
     // Just use progress bar instead
     // println!("Starting download...");
-    let pb = setup_progressbar(&mpd);
+    let total_segments = mpd.video_aset().segment_names_iterator().count() + mpd.audio_aset().segment_names_iterator().count();
+    let _ = tx.send(PrinterMessage::SetupPB(total_segments)).await;
 
-    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone(), pb.clone(), cnc_tok.clone()));
-    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc, pb.clone(), cnc_tok.clone()));        
+    let video_task = tokio::spawn(process_set((*mpd.video_aset()).clone(), dash_loc.clone(), tx.clone(), cnc_tok.clone()));
+    let audio_task = tokio::spawn(process_set((*mpd.audio_aset()).clone(), dash_loc, tx.clone(), cnc_tok.clone()));        
     let (rv, ra) = tokio::join!(video_task, audio_task);    
-    pb.finish();
+    let _ = tx.send(PrinterMessage::FinalizePB).await;
     // cancellation is graceful via token, and we don't expect processing to panic
     let results = (rv.unwrap(), ra.unwrap());
 
@@ -99,24 +109,11 @@ async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation, cnc_tok: Cancella
     Err(Some(errors))
 }
 
-fn setup_progressbar(mpd: &Mpd) -> ProgressBar {
-    let total_segments = mpd.video_aset().segment_names_iterator().count() + mpd.audio_aset().segment_names_iterator().count();
-    let pb = ProgressBar::new(total_segments as u64);
-    pb.set_style(ProgressStyle::with_template("{msg}:{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len}")
-        .unwrap()
-        .progress_chars("#>-"));
-    pb.set_draw_target(ProgressDrawTarget::stdout());
-    pb.set_message("Download progress");
-    pb
-}
 
-async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, pb: ProgressBar, cnc_tok: CancellationToken) 
+async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, tx: PrintTx, cnc_tok: CancellationToken) 
     -> CancellableResult<PathBuf, TubuError> 
 {
-
-    let pbc = pb.clone();
-    let dl = download_set(&aset, &dash_loc,
-        move || { pbc.inc(1); }, cnc_tok).await;
+    let dl = download_set(&aset, &dash_loc, tx.clone(), cnc_tok).await;
     match dl {        
         Ok(_) => (), // no data upon success; assume all segment files are written to known dir
         Err(None) => return Err(None),
@@ -130,7 +127,7 @@ async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, pb: ProgressBa
         Ok(track_path) => {
             // it is a bit misleading, as these messages will be displayed above the progress bar
             let msg = format!("Processed {} segment", aset.content_type);
-            pb.println(msg);
+            let _ = tx.send(PrinterMessage::Text(msg)).await;
             Ok(track_path)
         },
         Err(err) => Err(Some(TubuError::OnProcessingSegments { aset, err }))

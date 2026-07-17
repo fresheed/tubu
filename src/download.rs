@@ -5,13 +5,12 @@ use tokio::{fs::File, io, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{cancellation::{CancellableResult, as_cancellable, unless_cancelled}, config::DashLocation, errors::{SegmentDownloadError, reqwest_err_into_sde}, mpd::AdaptationSet};
+use crate::{cancellation::{CancellableResult, as_cancellable, unless_cancelled}, config::DashLocation, errors::{SegmentDownloadError, reqwest_err_into_sde}, mpd::AdaptationSet, printer::{PrintTx, PrinterMessage}};
 
 const NUM_ATTEMPTS: usize = 2;
 
-pub async fn download_set<T>(aset: &AdaptationSet, dash_loc: &DashLocation, cb: T, cnc_tok: CancellationToken)
+pub async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation, tx: PrintTx, cnc_tok: CancellationToken)
     -> CancellableResult<(), Vec<SegmentDownloadError>>
-    where T: FnOnce() + Clone + Send + 'static
 {    
     let mut segs: Vec<String> = aset.segment_names_iterator().collect();
     let mut attempts = NUM_ATTEMPTS;
@@ -22,7 +21,7 @@ pub async fn download_set<T>(aset: &AdaptationSet, dash_loc: &DashLocation, cb: 
         if attempts < NUM_ATTEMPTS { // only print it on actual retries
             println!("Trying to download {} segment again, {} attempts left", aset.content_type, attempts);
         };
-        match download_set_iter(segs, dash_loc, attempts > 1, cb.clone(), cnc_tok.clone()).await {
+        match download_set_iter(segs, dash_loc, attempts > 1, tx.clone(), cnc_tok.clone()).await {
             Ok(segs_left) => {
                 segs = segs_left;
                 attempts -= 1;                
@@ -40,18 +39,16 @@ pub async fn download_set<T>(aset: &AdaptationSet, dash_loc: &DashLocation, cb: 
 }
 
 // returns either the list of timed out segments, or non-timeout errors if any
-async fn download_set_iter<T>(segs: Vec<String>, dash_loc: &DashLocation, 
-                              forgive_timeouts: bool, cb: T,
-                              cnc_tok: CancellationToken,
-                            )
+async fn download_set_iter(segs: Vec<String>, dash_loc: &DashLocation, 
+                           forgive_timeouts: bool, tx: PrintTx,
+                           cnc_tok: CancellationToken)
     -> CancellableResult<Vec<String>, Vec<SegmentDownloadError>>
-    where T: FnOnce() + Clone + Send + 'static
 {
     let mut tasks = JoinSet::new();
     let client = reqwest::Client::new();
     for seg in segs {
         let url = dash_loc.segment_url(&seg);
-        tasks.spawn(download_segment(url, seg, client.clone(), cb.clone(), cnc_tok.clone()));
+        tasks.spawn(download_segment(url, seg, client.clone(), tx.clone(), cnc_tok.clone()));
     };
 
     let results = tasks.join_all().await;
@@ -87,9 +84,9 @@ async fn download_set_iter<T>(segs: Vec<String>, dash_loc: &DashLocation,
     }
 }
 
-async fn download_segment<T: FnOnce()>(seg_url: Url, name: String, client: Client, cb: T,
-                                       cnc_tok: CancellationToken,)
-    -> CancellableResult<(), (String, SegmentDownloadError)> 
+async fn download_segment(seg_url: Url, name: String, client: Client, cb: PrintTx,
+                          cnc_tok: CancellationToken)
+    -> CancellableResult<(), (String, SegmentDownloadError)>
 {
     // Separating the actual download function to ease error handling.
     // The name of the failing segment is needed for identifying required retries,
@@ -97,7 +94,10 @@ async fn download_segment<T: FnOnce()>(seg_url: Url, name: String, client: Clien
     let _ = download_segment_impl(seg_url, &name, client, cnc_tok).await
         .map_err(|oe| oe.map(|e| (name, e)))
         ?;
-    cb();
+    match cb.send(PrinterMessage::IncPB).await {
+        Ok(_) => (),
+        Err(_) => eprintln!("Warning: logging failure"),
+    };
     Ok(())
 }
 
