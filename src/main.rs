@@ -38,7 +38,7 @@ async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
     let (dash_loc, mpd) = unless_cancelled(fetch_manifest(), &cnc_tok).await        
         .map_err(|oerr| oerr.map(|err| vec!(TubuError::OnReadingManifest { err })))?;
     
-    let (video_path, audio_path) = process_video_audio(mpd, dash_loc, cnc_tok, tx).await?;
+    let (video_path, audio_path) = process_video_audio(mpd, dash_loc, cnc_tok, tx.clone()).await?;
 
     // Cancellation is only accounted for if happened before/during segments download.
     // Everything after is relatively quick, and it's easier to just complete the process
@@ -47,7 +47,10 @@ async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
 
     let out_path = mux_tracks(&video_path, &audio_path)
         .map_err(|err| vec!(TubuError::OnMuxing { err }))?;
-    println!("Download successful: {}", out_path.to_string_lossy());
+    
+    let msg = format!("Download successful: {}", out_path.to_string_lossy());
+    let _ = tx.send(PrinterMessage::Text(msg)).await;
+    drop(tx);
     
     let _ = tokio::join!(print_handle);
     Ok(())
@@ -61,7 +64,8 @@ fn create_ctrl_c_handler(tx: PrintTx) -> (impl Future<Output = Result<(), TubuEr
             Ok(()) => {
                 tok2.cancel();
                 let _ = tx.send(PrinterMessage::Text("Cancelling the download...".to_string())).await;
-                let _ = tx.send(PrinterMessage::FinalizePB).await;
+                // the finalization message is sent from process_video_audio
+                // let _ = tx.send(PrinterMessage::FinalizePB).await;
                 Ok(())
             },
             Err(err) => {
@@ -86,8 +90,6 @@ async fn process_video_audio(mpd: Mpd, dash_loc: DashLocation,
                              cnc_tok: CancellationToken, tx: PrintTx)
     -> CancellableResult<(PathBuf, PathBuf), Vec<TubuError>> 
 {
-    // Just use progress bar instead
-    // println!("Starting download...");
     let total_segments = mpd.video_aset().segment_names_iterator().count() + mpd.audio_aset().segment_names_iterator().count();
     let _ = tx.send(PrinterMessage::SetupPB(total_segments)).await;
 
@@ -121,8 +123,7 @@ async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, tx: PrintTx, c
             return Err(Some(TubuError::OnLoadingSegments { aset, errs }))
         }
     };
-    // Now this is replaced by the unified progress bar
-    // println!("Downloaded {} segment", aset.content_type);
+
     match concat_track(&aset).await {
         Ok(track_path) => {
             // it is a bit misleading, as these messages will be displayed above the progress bar

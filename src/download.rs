@@ -19,7 +19,8 @@ pub async fn download_set(aset: &AdaptationSet, dash_loc: &DashLocation, tx: Pri
     // TODO: make it nicer?
     while !segs.is_empty() && attempts > 0 {        
         if attempts < NUM_ATTEMPTS { // only print it on actual retries
-            println!("Trying to download {} segment again, {} attempts left", aset.content_type, attempts);
+            let msg = format!("Trying to download {} segment again, {} attempts left", aset.content_type, attempts);
+            let _ = tx.send(PrinterMessage::Text(msg)).await;
         };
         match download_set_iter(segs, dash_loc, attempts > 1, tx.clone(), cnc_tok.clone()).await {
             Ok(segs_left) => {

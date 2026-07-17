@@ -7,6 +7,7 @@ It uses asychronicity to improve performance on:
 - downloads of individual segments of audio/video tracks
 - saving segments to separate files
 - less important: concatenating segments into the audio and video tracks (only 2 tasks executing simultaneously)
+Moveover, we use tokio's channels to unify the process' outputs. 
 
 ## Current status and future work
 
@@ -26,7 +27,7 @@ At the moment, a not-so-happy path is working:
    - If all segments are saved, the cancellation is ignored, and tubu produces the final file
 - The errors occurring at any stage are propagated to the main function, except for timeouts that are treated differently as described above (might need to clean up the error types to improve it)
 
-Future work (coming in the next few days):
+Future work:
 - [x] complete environment setup with `docker compose`
 - [ ] making server and manifest location the input arguments
 - [ ] integration tests (at least binary match of downloaded individual segments)
@@ -67,8 +68,8 @@ The main container installs `ffmpeg`, builds the project and immediately runs it
 ## Stack
 
 - Rust for, well, everything
-- `tokio` for organizing the async download and saving of segments; plus `tokio-util` for CancellationToken
-- `reqwest` for async GET requests
+- `tokio` for organizing the async download, saving of segments and logging; plus `tokio-util` for CancellationToken
+- `reqwest` for sending async GET requests
 - `serde` + `quick-xml` + `xml_schema_generator` for turning a sample `.mpd` file into a Rust type for MPD
 - `indicatif` for progress bar
 - `ffmpeg` for final muxing

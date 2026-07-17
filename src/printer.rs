@@ -15,7 +15,6 @@ pub enum PrinterMessage {
 struct Printer {
     rx: mpsc::Receiver<PrinterMessage>,
     pb: Option<ProgressBar>,
-    active: bool,
 }
 
 pub type PrintTx = mpsc::Sender<PrinterMessage>;
@@ -23,7 +22,7 @@ pub type PrintTx = mpsc::Sender<PrinterMessage>;
 pub fn create_printer() -> (impl Future<Output=()>, PrintTx) {
     const BUF_SIZE: usize = 10;
     let (tx, rx) = mpsc::channel(BUF_SIZE);
-    let printer = Printer {rx, pb: None, active: true, };
+    let printer = Printer {rx, pb: None };
     (printer.printer_future(), tx)
 }
 
@@ -42,25 +41,23 @@ impl Printer {
             PrinterMessage::Text(msg) => self._println(msg),
             PrinterMessage::SetupPB(size) => {
                 self.setup_pb(size);
-                self.active = true;
             },
             PrinterMessage::IncPB =>  
                 match &self.pb {
                     Some(pb) => {
-                        if self.active { pb.inc(1); }
+                        pb.inc(1);
                     },
                     None => (),
                 },
-            PrinterMessage::FinalizePB =>
+            PrinterMessage::FinalizePB => {
                 match &self.pb {
                     Some(pb) => {
-                        if self.active {
-                            pb.tick(); // to force redraw the current state
-                        };
-                        self.active = false;
+                        pb.tick(); // to force redraw the current state
+                        self.pb = None;
                     }
                     None => (),
-                },
+                }
+            },
         }
     }
 
@@ -76,7 +73,6 @@ impl Printer {
     }
 
     fn _println(&self, msg: String) {
-        if !self.active { return };
         match &self.pb {
             Some(pb) => pb.println(msg),
             None => println!("{}", msg),
