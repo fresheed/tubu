@@ -1,4 +1,4 @@
-use std::{io::Cursor, path::PathBuf, time::{Duration, Instant}};
+use std::{io::Cursor, path::PathBuf, time::Duration};
 use tokio_util::bytes::Bytes;
 use reqwest::Client;
 use tokio::{fs::File, io, task::JoinSet, time::timeout};
@@ -113,11 +113,6 @@ async fn download_segment_impl(seg_url: Url, name: &String, client: Client, cnc_
 const MAX_FETCH_DUR: Duration = Duration::from_secs(10);
 
 async fn fetch_segment(seg_url: Url, client: Client) -> Result<Bytes, SegmentDownloadError> {
-    timeout(MAX_FETCH_DUR, fetch_segment_impl(seg_url, client)).await
-        .map_err(|e| SegmentDownloadError::Timeout { err: None })?
-}
-
-async fn fetch_segment_impl(seg_url: Url, client: Client) -> Result<Bytes, SegmentDownloadError> {    
     /* There are two kinds of timeouts being accounted for:
        - timeout for TCP handshake occuring upon get(..).send(),
          which is triggered at OS level and presented as reqwest's Err         
@@ -127,7 +122,12 @@ async fn fetch_segment_impl(seg_url: Url, client: Client) -> Result<Bytes, Segme
          reqwest does not deal with this at all.
        Note that tubu ends up representing both as SegmentDownloadError::Timeout,
        because they are handled in a same way (retrying a fixed number of times). */
-       
+
+    timeout(MAX_FETCH_DUR, fetch_segment_impl(seg_url, client)).await
+        .map_err(|_| SegmentDownloadError::Timeout { err: None })?
+}
+
+async fn fetch_segment_impl(seg_url: Url, client: Client) -> Result<Bytes, SegmentDownloadError> {    
     let res = client.get(seg_url.clone()).send().await;    
     let resp = res.and_then(|r| r.error_for_status())
         .map_err(reqwest_err_into_sde)?;
