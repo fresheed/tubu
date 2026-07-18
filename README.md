@@ -1,9 +1,9 @@
 # tubu - an async DASH Downloader
 
 A downloader for DASH-streamed video.
+This is a project for practicing async Rust w/ tokio, as well as some aspects of systems programming. 
 
-This is a project for exploring async Rust w/ tokio. 
-It uses asychronicity to improve performance on:
+tubu uses asychronicity to improve performance on:
 - downloads of individual segments of audio/video tracks
 - saving segments to separate files
 - less important: concatenating segments into the audio and video tracks (only 2 tasks executing simultaneously)
@@ -28,11 +28,12 @@ At the moment, a not-so-happy path is working:
 - The errors occurring at any stage are propagated to the main function, except for timeouts that are treated differently as described above
 - DASH server, as well as location of .mpd manifest file in it, is currently hardcoded
 
-Future work:
+Future work: since the goal of the project is practicing async Rust and systems programming, the corresponding items have higher priority, even despite e.g. proper testing obviously being useful:
 - [x] complete environment setup with `docker compose`
+- [x] graceful shutdown
+- [ ] intercepting the internal calls of `ffmpeg` and passing the information into the tubu process
 - [ ] making server and manifest location the input arguments
 - [ ] integration tests (at least binary match of downloaded individual segments)
-- [x] graceful shutdown
 - [ ] resumable downloads: before starting, tubu should check whether (some of) segments have already been downloaded
 - [ ] final muxing without `ffmpeg`
 
