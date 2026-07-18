@@ -7,7 +7,8 @@ It uses asychronicity to improve performance on:
 - downloads of individual segments of audio/video tracks
 - saving segments to separate files
 - less important: concatenating segments into the audio and video tracks (only 2 tasks executing simultaneously)
-Moveover, we use tokio's channels to unify the process' outputs. 
+
+Moveover, tokio's channels are used to unify the process' outputs. 
 
 ## Current status and future work
 
@@ -18,14 +19,14 @@ Overall, upon `cargo run`, tubu:
 4. calls `ffmpeg` to obtain the complete video file
 
 At the moment, a not-so-happy path is working:
-- DASH server, as well as location of .mpd manifest file in it, is hardcoded
-- tubu implements a retry logic, which is needed for slow servers, such as python's `http.server` (both single- and multithreaded). It might happen both due to TCP handshake being ignored by the server, or because of its slow response. In both cases, we restart the download task with the remaining segments, repeating it a fixed number of times until giving up
+- tubu implements a retry logic for timeouts, which especially occur with slow servers such as python's `http.server` (single- or multithreaded). Timeouts might happen either due to TCP handshake being ignored by the server, or because of its slow response. In both cases, we restart the download task for the timed out segments, repeating it a fixed number of times until giving up
 - The download process can be gracefully cancelled with Ctrl-C. The behavior depends on when the cancellation occurs:
    - If it happens before the download starts, the process stops there
    - If a given segment is being fetched from the server, the corresponding task is cancelled.
    - If a segment is already fetched, but not saved to the file yet, cancellation is ignored (at least for this specific segment), and it is saved
    - If all segments are saved, the cancellation is ignored, and tubu produces the final file
-- The errors occurring at any stage are propagated to the main function, except for timeouts that are treated differently as described above (might need to clean up the error types to improve it)
+- The errors occurring at any stage are propagated to the main function, except for timeouts that are treated differently as described above
+- DASH server, as well as location of .mpd manifest file in it, is currently hardcoded
 
 Future work:
 - [x] complete environment setup with `docker compose`
@@ -41,7 +42,7 @@ Future work:
 
 The project provides a complete setup with a minimal server and sample video to work with. Assuming your system has Docker Compose, checking this setup amounts to simply cloning the repo and running `docker compose up` from the project root. 
 
-The server is a simple Python `http.server` (multithreaded). Upon starting, it preprocesses the sample video by creating the manifest file and the segment files. It serves at `localhost:8000`; it is forwarded to the host machine, and the server includes a simple `index.html` page, so you can see the video in your browser `localhost:8000` (you might want to turn the audio a bit down). 
+The server is a simple Python `http.server` (multithreaded). Upon starting, it preprocesses the sample video by creating the manifest file and the segment files. It serves at `localhost:8000`; it is forwarded to the host machine, and the server includes a simple `index.html` page, so you can see the video in your browser `localhost:8000` *(you might want to turn the audio a bit down)*. 
 
 The main container installs `ffmpeg`, builds the project and immediately runs it. The resulting video is stored in `outputs/output.mp4`, which is mapped to the working directory, so you can also see it on the host machine. 
 
