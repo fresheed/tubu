@@ -4,3 +4,5 @@ outputs/
 compare_dirs.sh
 broken.log
 server/dash/
+*.m4s
+*.so
