@@ -5,30 +5,21 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <stdatomic.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+#define SHM_NAME "/tubu_shared"
 
 // using the va_list version to pass variadic arguments to the original function
 static void (*real_av_vlog) (void*, int, const char*, va_list) = NULL;
 _Atomic int* frames_amount = NULL;
 
-bool is_frame_msg(const char* msg) {
-    const char FRAME_PREF[] = "frame=";
-    return strncmp(msg, FRAME_PREF, strlen(FRAME_PREF)) == 0;
-}
-
-#define _GNU_SOURCE
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdatomic.h>
-#include <fcntl.h>      // O_CREAT, O_RDWR
-#include <sys/mman.h>   // shm_open, mmap
-#include <sys/stat.h>   // mode constants
-#include <unistd.h>     // ftruncate, close, _exit
-
-#define SHM_NAME "/tubu_shared"
-
 _Atomic int* setup_shared_memory() {
-    int fd = shm_open(SHM_NAME, O_RDWR, 0600);
-    if (fd == -1) {
+    int shm = shm_open(SHM_NAME, O_RDWR, 0600);
+    if (shm == -1) {
         perror("shm_open");
         return NULL;
     }
@@ -38,16 +29,22 @@ _Atomic int* setup_shared_memory() {
         sizeof(_Atomic int),
         PROT_READ | PROT_WRITE,
         MAP_SHARED, 
-        fd, 
+        shm, 
         0 // but C and Rust must agree on where the data is within the shared memory
     );
 
-    close(fd);  // can be closed immediately according to `man mmap`
+    close(shm);  // can be closed immediately according to `man mmap`
 
     if (ptr == MAP_FAILED) {
         perror("mmap");
         return NULL;
     }
+
+    // No need for teardown upon ffmpeg termination:
+    // 1) munmap is not required - see man mmap:
+    // "region is also automatically unmapped when the process is terminated"
+    // 2) shm_unlink is done by tubu who created shm object
+    // 3) local fd is already closed
 
     return ptr;
 }
@@ -72,9 +69,10 @@ void av_log(void *avcl, int level, const char *fmt, ...) {
     vsnprintf(msg, sizeof(msg), fmt, args);
     va_end(args);
 
-    if (is_frame_msg(msg)) {
-        printf("INTERCEPTED\n");
-        atomic_fetch_add_explicit(frames_amount, 1, memory_order_relaxed);
+    int f;
+    if (sscanf(msg, "frame=%d", &f) == 1) {
+        // use frame
+        atomic_store_explicit(frames_amount, f, memory_order_relaxed);
     } else {
         va_start(args, fmt);
         real_av_vlog(avcl, level, fmt, args);

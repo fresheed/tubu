@@ -124,6 +124,6 @@ impl From<InvalidMpd> for ManifestError {
 
 impl From<Errno> for MuxingError {
     fn from(err: Errno) -> Self {
-        Self { err }
+        Self::ShmemError { err }
     }
 }
