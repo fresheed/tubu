@@ -1,4 +1,5 @@
 use std::{fmt, process::{ExitStatus}};
+use nix::errno::Errno;
 use tokio::io;
 
 use crate::mpd::{AdaptationSet, InvalidMpd};
@@ -85,6 +86,7 @@ pub enum ManifestError {
 pub enum MuxingError {
     FfmpegProcError { err: io::Error },
     FfmpegFailed { code: ExitStatus },
+    ShmemError { err: Errno, }
 }
 
 #[derive(Debug)]
@@ -117,5 +119,11 @@ impl From<reqwest::Error> for ManifestError {
 impl From<InvalidMpd> for ManifestError {
     fn from(err: InvalidMpd) -> Self {
         Self::InvalidManifest { err }
+    }
+}
+
+impl From<Errno> for MuxingError {
+    fn from(err: Errno) -> Self {
+        Self { err }
     }
 }

@@ -4,3 +4,4 @@ pub mod download;
 pub mod config;
 pub mod cancellation;
 pub mod printer;
+pub mod muxing;

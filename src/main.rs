@@ -1,7 +1,7 @@
-use std::{path::{Path, PathBuf}, process::{ExitCode, Stdio}};
+use std::{path::PathBuf, process::ExitCode};
 use tokio::{fs::File, io, signal};
 use tokio_util::sync::CancellationToken;
-use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, MuxingError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}, printer::{self, PrintTx, PrinterMessage}};
+use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}, muxing::mux_tracks, printer::{self, PrintTx, PrinterMessage}};
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const DASH_PATH: &str = "dash/";
@@ -134,34 +134,6 @@ async fn process_set(aset: AdaptationSet, dash_loc: DashLocation, tx: PrintTx, c
         Err(err) => Err(Some(TubuError::OnProcessingSegments { aset, err }))
     }
 }
-
-fn mux_tracks(video_path: &Path, audio_path: &Path) -> Result<PathBuf, MuxingError> {
-    let out_path = PathBuf::from("outputs").join("output.mp4");
-    // Could be nice to also implement this multiplexing, 
-    // but for now we simply use ffmpeg    
-    let args = ["-i", &video_path.to_string_lossy(), "-i", &audio_path.to_string_lossy(),
-                           "-c", "copy", // no further processing
-                            "-map", "0:v:0", "-map", "1:a:0", // explicitly specify video/audio sources
-                            "-y", // overwrite existing output file
-                            &out_path.to_string_lossy()];
-    let proc = std::process::Command::new("ffmpeg")
-                       .args(&args)
-                       .stdout(Stdio::null())
-                       .stderr(Stdio::null()) // ffmpeg logs to stderr
-                       .spawn();
-
-    let mut proc = proc.map_err(|err| MuxingError::FfmpegProcError { err })?;
-    let out_status = match proc.wait() {
-        Ok(status)  => status,
-        Err(err)    => return Err(MuxingError::FfmpegProcError { err })
-    };
-    if out_status.success() {
-        Ok(out_path)
-    } else {
-        Err(MuxingError::FfmpegFailed { code: out_status })
-    }
-}
-
 
 async fn concat_track(aset: &AdaptationSet) -> Result<PathBuf, ProcessingError> {
     let name: String = format!("track_{}.mp4", aset.content_type);
