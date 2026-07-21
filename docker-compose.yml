@@ -5,7 +5,7 @@ services:
       - "8000:8000"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/dash/manifest.mpd')"]
-      interval: 2s
+      interval: 5s
       timeout: 2s
       retries: 15
 
@@ -14,6 +14,8 @@ services:
       context: .
       dockerfile: Dockerfile.downloader
     working_dir: /app
+    stdin_open: true
+    tty: true
     volumes:
       - .:/app
       - cargo-registry:/usr/local/cargo/registry

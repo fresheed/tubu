@@ -6,4 +6,4 @@ RUN apt-get update \
 
 WORKDIR /app
 
-CMD ["cargo", "run"]
+CMD ["sleep", "infinity"]
