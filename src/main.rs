@@ -1,7 +1,7 @@
-use std::{path::PathBuf, process::ExitCode};
+use std::{io::ErrorKind, path::{Path, PathBuf}, process::ExitCode};
 use tokio::{fs::File, io, signal};
 use tokio_util::sync::CancellationToken;
-use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}, muxing::mux_tracks, printer::{self, PrintTx, PrinterMessage}};
+use tubu::{cancellation::{CancellableResult, unless_cancelled}, config::DashLocation, download::download_set, errors::{ManifestError, ProcessingError, TubuError}, mpd::{AdaptationSet, Mpd}, muxing::{self, mux_tracks}, printer::{self, PrintTx, PrinterMessage}};
 
 const SERVER_URL: &str ="http://127.0.0.1:8000/";
 const DASH_PATH: &str = "dash/";
@@ -26,6 +26,10 @@ async fn main() -> ExitCode {
 
 // Can produce multiple errors (e.g. failing to download audio and process video simultaneously)
 async fn tubu_main() -> CancellableResult<(), Vec<TubuError>> {
+    if !Path::new(muxing::SO_PATH).exists() { 
+        let err = std::io::Error::new(ErrorKind::NotFound, format!("{} cannot be accessed", muxing::SO_PATH));
+        return Err(Some(vec![TubuError::OnSetup { err }]))
+    }
     let (printer_fut, tx) = printer::create_printer();
     let print_handle = tokio::spawn(printer_fut);
 

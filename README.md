@@ -29,7 +29,7 @@ At the moment, a not-so-happy path is working:
 - DASH server, as well as location of .mpd manifest file in it, is currently hardcoded
 - Instead of showing the exact output of `ffmpeg` at the last step, we employ dynamic library interception to intercept the logging calls of `ffmpeg` and pass the relevant information to the tubu process. Specifically:
    1. Before spawning `ffmpeg`, tubu sets up a shared memory object and a pointer into an address in it
-   2. `ffmpeg` is spawned with `LD_PRELOAD=...` that points to a shared library obtained by compiling `./intercept/av_log_intercept.c` upon `cargo build`
+   2. `ffmpeg` is spawned with `LD_PRELOAD=...` that points to a shared library obtained by compiling `./intercept/av_log_intercept.c` upon `cargo build` (or separately with `cargo build-so`)
    3. This library sets up the same memory object and a pointer to the same address
    4. The library intercepts the calls to `av_log` which `ffmpeg` sends the log messages into. In particular, it finds the messages containing the number of currently processed frames and writes this number to the pointer
    5. After spawning, tubu repeatedly checks the `ffmpeg` process status, and if it is not terminated yet, it reads the current value under pointer and displays it using `indicatif`'s machinery.

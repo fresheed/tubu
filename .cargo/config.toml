@@ -1,0 +1,2 @@
+[alias]
+build-so = "run --quiet --bin build_so"

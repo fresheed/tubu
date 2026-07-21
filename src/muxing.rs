@@ -1,6 +1,6 @@
 use std::{num::{NonZero, NonZeroUsize}, path::{Path, PathBuf}, process::{Command, Stdio}, sync::atomic::{AtomicU32, Ordering}, thread, time::Duration};
 use indicatif::{ProgressBar, ProgressStyle};
-use nix::{errno::Errno, fcntl::OFlag, sys::{mman::{MapFlags, ProtFlags, mmap, shm_open, shm_unlink}, stat::Mode}, unistd::{close, ftruncate}};
+use nix::{fcntl::OFlag, sys::{mman::{MapFlags, ProtFlags, mmap, shm_open, shm_unlink}, stat::Mode}, unistd::{close, ftruncate}};
 
 use crate::errors::MuxingError;
 
@@ -9,20 +9,59 @@ use crate::errors::MuxingError;
 
 const TUBU_SHMEM_ID: &str = "/tubu_shared";
 const SHARED_SIZE: NonZero<usize> = NonZeroUsize::new(size_of::<u32>()).unwrap();
+pub const SO_PATH: &'static str = "./intercept/av_log_intercept.so";
 
 pub fn mux_tracks(video_path: &Path, audio_path: &Path) -> Result<PathBuf, MuxingError> {
-    let out_path: PathBuf = PathBuf::from("outputs").join("output.mp4");
-    // see the comments in av_log_intercept.c about tearing shm down
-    let raw = setup_shmem()?;
-    let frame_amount: &AtomicU32 = unsafe { AtomicU32::from_ptr(raw as *mut u32) };
+    let out_path: PathBuf = PathBuf::from("outputs").join("output.mp4");    
+    
+    let shmem = setup_shmem()?; // torn down in drop()
+    let frame_amount = shmem.as_ref();
     frame_amount.store(0, Ordering::Relaxed);
 
     let cmd = get_ffmpeg_cmd(video_path, audio_path, &out_path);
     run_and_track(frame_amount, cmd)?;
 
-    let _ = teardown_shmem() // simply report an error, don't propagate it
-        .unwrap_or_else(|err| eprintln!("Error on tearing down shared memory: {}", err));
     Ok(out_path)
+}
+
+/// See the comments in the interceptor C file about tearing down.
+/// tubu must remove `/tubu_shared` regardless of execution result.
+/// We implement this in drop() for a simple wrapper 
+/// over the returned pointer to shared object
+struct ShmemPtr { ptr: *mut u32, }
+
+impl ShmemPtr {
+    fn as_ref(&self) -> &AtomicU32 {
+        unsafe { AtomicU32::from_ptr(self.ptr) }
+    }
+}
+
+impl Drop for ShmemPtr {
+    fn drop(&mut self) {
+        if let Err(err) = shm_unlink(TUBU_SHMEM_ID) {
+            eprintln!("Error on tearing down shared memory: {}", err);
+        }
+    }
+}
+
+fn setup_shmem() -> Result<ShmemPtr, MuxingError> {
+    let shm_flags = OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_RDWR;
+    let shm_mode = Mode::S_IRUSR | Mode::S_IWUSR;
+    let fd = shm_open(TUBU_SHMEM_ID, shm_flags, shm_mode)?;
+    // create ShmemPtr here already to account for errors until return
+    // TODO: needs refactoring
+    let mut guard = ShmemPtr { ptr: std::ptr::null_mut() };
+
+    ftruncate(&fd, SHARED_SIZE.get() as i64)?;
+    let mmap_prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
+    let ptr_raw = unsafe {
+        mmap(None, SHARED_SIZE, mmap_prot,
+            MapFlags::MAP_SHARED, &fd,0)
+    }?;
+    close(fd)?;
+
+    guard.ptr = ptr_raw.as_ptr() as *mut u32;
+    Ok(guard)
 }
 
 fn run_and_track(frame_amount: &AtomicU32, mut cmd: Command) -> Result<(), MuxingError> {
@@ -51,31 +90,7 @@ fn run_and_track(frame_amount: &AtomicU32, mut cmd: Command) -> Result<(), Muxin
     }
 }
 
-fn setup_shmem() -> Result<*mut u32, MuxingError> {
-    let shm_flags = OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_RDWR;
-    let shm_mode = Mode::S_IRUSR | Mode::S_IWUSR;
-    let fd = shm_open(TUBU_SHMEM_ID, shm_flags, shm_mode)?;
-    ftruncate(&fd, SHARED_SIZE.get() as i64)?;
-    let mmap_prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE;
-    let ptr_raw = unsafe { 
-        mmap(None, SHARED_SIZE, mmap_prot, 
-            MapFlags::MAP_SHARED, &fd,0)
-    }?;
-    close(fd)?;
-    Ok(ptr_raw.as_ptr() as *mut u32)
-}
-
-fn teardown_shmem() -> Result<(), Errno> {
-    shm_unlink(TUBU_SHMEM_ID)
-}
-
-fn get_ffmpeg_cmd(video_path: &Path, audio_path: &Path, out_path: &Path) -> Command { 
-    // let args = ["-i", &video_path.to_string_lossy(), "-i", &audio_path.to_string_lossy(),
-    //                         "-c", "copy", // no further processing
-    //                         "-map", "0:v:0", "-map", "1:a:0", // explicitly specify video/audio sources
-    //                         "-y", // overwrite existing output file
-    //                         &out_path.to_string_lossy()];
-
+fn get_ffmpeg_cmd(video_path: &Path, audio_path: &Path, out_path: &Path) -> Command {
     // slow it down to see that the progress bar actually gets updated
     let args = ["-i", &video_path.to_string_lossy(), "-i", &audio_path.to_string_lossy(),
                         "-c:v", "libx264", "-preset", "veryslow", // force real per-frame encoding
@@ -84,10 +99,11 @@ fn get_ffmpeg_cmd(video_path: &Path, audio_path: &Path, out_path: &Path) -> Comm
                         "-y", // overwrite existing output file
                         &out_path.to_string_lossy()];
                             
-    let mut cmd = std::process::Command::new("ffmpeg");
+    let mut cmd = std::process::Command::new("ffmpeg");    
     cmd.args(&args)
        .stdout(Stdio::null())
        .stderr(Stdio::null()) // ffmpeg logs to stderr
-       .env("LD_PRELOAD", "./intercept/av_log_intercept.so");
+       //.stderr(Stdio::inherit()) // ffmpeg logs to stderr
+       .env("LD_PRELOAD", SO_PATH);
     cmd
 }
