@@ -38,7 +38,7 @@ At the moment, a not-so-happy path is working:
 Future work: since the goal of the project is practicing async Rust and systems programming, the corresponding items have higher priority, even despite e.g. proper testing obviously being useful:
 - [x] complete environment setup with `docker compose`
 - [x] graceful shutdown
-- [ ] intercepting the internal logging calls within `ffmpeg` and passing the information into the tubu process
+- [x] intercepting the internal logging calls within `ffmpeg` and passing the information into the tubu process
 - [ ] final muxing without `ffmpeg`
 - [ ] integration tests (at least binary match of downloaded individual segments)
 - [ ] making server and manifest location the input arguments
