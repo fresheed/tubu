@@ -29,10 +29,11 @@ At the moment, a not-so-happy path is working:
 - DASH server, as well as location of .mpd manifest file in it, is currently hardcoded
 - Instead of showing the exact output of `ffmpeg` at the last step, we employ dynamic library interception to intercept the logging calls of `ffmpeg` and pass the relevant information to the tubu process. Specifically:
    1. Before spawning `ffmpeg`, tubu sets up a shared memory object and a pointer into an address in it
-   2. `ffmpeg` is spawned with `LD_PRELOAD=...` that points to a shared library obtained by compiling `./intercept/av_log_intercept.s` upon `cargo build`
+   2. `ffmpeg` is spawned with `LD_PRELOAD=...` that points to a shared library obtained by compiling `./intercept/av_log_intercept.c` upon `cargo build`
    3. This library sets up the same memory object and a pointer to the same address
    4. The library intercepts the calls to `av_log` which `ffmpeg` sends the log messages into. In particular, it finds the messages containing the number of currently processed frames and writes this number to the pointer
    5. After spawning, tubu repeatedly checks the `ffmpeg` process status, and if it is not terminated yet, it reads the current value under pointer and displays it using `indicatif`'s machinery.
+- To make this progress reporting actually meaningful, the final muxing step re-encodes the video track (`libx264`, `veryslow` preset) instead of doing a fast stream copy. This is slower and lossy compared to a plain remux, but gives `ffmpeg` per-frame work to report on
 
 Future work: since the goal of the project is practicing async Rust and systems programming, the corresponding items have higher priority, even despite e.g. proper testing obviously being useful:
 - [x] complete environment setup with `docker compose`
@@ -64,7 +65,7 @@ The server is a simple Python `http.server` (multithreaded). Upon starting, it p
 
 ### Manual setup 
 
-1. Note that due to the usage of `shm` mechanism at the interception stage, the project only runs on POSIX-compliant systems
+1. Note that the interception stage relies on POSIX `shm` and `LD_PRELOAD`, so the project only runs on Linux (or another `LD_PRELOAD`-capable system)
 2. Make sure your system has the prerequisites
    - Rust toolchain supporting edition 2024 (rustc ≥ 1.85)
    - `ffmpeg`
@@ -78,7 +79,7 @@ The server is a simple Python `http.server` (multithreaded). Upon starting, it p
    ```   
    
    As mentioned above, parameterizing tubu with manifest location is future work coming soon.
-3. Run tubu:
+4. Run tubu:
    ```
    cargo run
    ```
@@ -92,7 +93,8 @@ The server is a simple Python `http.server` (multithreaded). Upon starting, it p
 - `serde` + `quick-xml` + `xml_schema_generator` for turning a sample `.mpd` file into a Rust type for MPD
 - `indicatif` for progress bars
 - `ffmpeg` for final muxing
-- C, `dlsym` + `LD_PRELOAD` mechanism and POSIX shared memory objects for passing information from `ffmpeg` process to tubu
+- `nix` for the Rust-side POSIX shared memory interface
+- C, `dlsym` + `LD_PRELOAD` mechanism and POSIX shared memory objects on the `ffmpeg` side, for passing information from the `ffmpeg` process to tubu
 
 ## License
 
