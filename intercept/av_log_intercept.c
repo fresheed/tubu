@@ -10,23 +10,24 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <inttypes.h>
 
 #define SHM_NAME "/tubu_shared"
 
 // using the va_list version to pass variadic arguments to the original function
 static void (*real_av_vlog) (void*, int, const char*, va_list) = NULL;
-_Atomic int* frames_amount = NULL;
+_Atomic u_int32_t* frames_amount = NULL;
 
-_Atomic int* setup_shared_memory() {
+_Atomic u_int32_t* setup_shared_memory() {
     int shm = shm_open(SHM_NAME, O_RDWR, 0600);
     if (shm == -1) {
         perror("shm_open");
         return NULL;
     }
 
-    _Atomic int* ptr = mmap(
+    _Atomic u_int32_t* ptr = mmap(
         NULL, // we don't care about the logical address for this process
-        sizeof(_Atomic int),
+        sizeof(_Atomic u_int32_t),
         PROT_READ | PROT_WRITE,
         MAP_SHARED, 
         shm, 
@@ -69,9 +70,8 @@ void av_log(void *avcl, int level, const char *fmt, ...) {
     vsnprintf(msg, sizeof(msg), fmt, args);
     va_end(args);
 
-    int f;
-    if (sscanf(msg, "frame=%d", &f) == 1) {
-        // use frame
+    u_int32_t f;
+    if (sscanf(msg, "frame=%" SCNu32, &f) == 1) {
         atomic_store_explicit(frames_amount, f, memory_order_relaxed);
     } else {
         va_start(args, fmt);
